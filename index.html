@@ -10,10 +10,11 @@
   <canvas id="game"></canvas>
 
   <div id="menu">
+    <div class="menu-bg"><div class="menu-ridge"></div></div>
     <div class="menu-wrap">
       <header class="menu-head">
         <div class="menu-tag">ПРОТОТИП</div>
-        <h1 class="menu-title">Центральная</h1>
+        <h1 class="menu-title" data-text="Центральная">Центральная</h1>
         <p class="menu-lead">
           2D-боевик, где боец-рэгдолл, собранный из овалов, идёт по полю боя вместе с отрядом.
           Стреляй, бросай гранаты, прячься от налётов и ракет — и следи за телом:
@@ -29,16 +30,48 @@
         </nav>
 
         <section class="menu-about">
-          <h2>Что в игре</h2>
+          <h2><span>Что в игре</span><i></i><small>10 систем</small></h2>
           <ul class="menu-feats">
-            <li><b>Живое тело</b><span>Ходьба, присед, лёжа и рывок. Вставание анимировано и зависит от ран.</span></li>
-            <li><b>Система ранений</b><span>Кровь, боль, контузия, раны по частям тела, шок и нокаут.</span></li>
-            <li><b>Медицина</b><span>Перевязка и аптечка прямо в бою — достань бинт на 2 и удерживай ЛКМ.</span></li>
-            <li><b>Снаряжение</b><span>Каска и бронежилет, которые принимают удар на себя.</span></li>
-            <li><b>Оружие</b><span>Стрельба и гранаты.</span></li>
-            <li><b>Угрозы с неба</b><span>Ракеты, налёты авиации и мощные удары с предупреждением.</span></li>
-            <li><b>Отряд и враги</b><span>Твой отряд идёт строем, враги приходят группами.</span></li>
-            <li><b>Поле боя</b><span>Воронки, обломки, лужи крови и мини-карта внизу экрана.</span></li>
+            <li style="--i:0">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"/><path d="M12 8v6M7 10l5 1 5-1M12 14l-3 7M12 14l3 7"/></svg></div>
+              <div class="feat-t"><b>Живое тело</b><span>Боец-рэгдолл: ходьба, присед, лёжа и рывок. Вставание зависит от ран: бодрый рывок или тяжело, с передышкой.</span></div>
+            </li>
+            <li class="red" style="--i:1">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/><path d="M12 11v5M9.5 13.5h5"/></svg></div>
+              <div class="feat-t"><b>Ранения</b><span>Кровь, боль, контузия и раны по частям тела. Болевой шок и нокаут: очнуться помогают частые <kbd>A</kbd><kbd>D</kbd>.</span></div>
+            </li>
+            <li class="blue" style="--i:2">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/></svg></div>
+              <div class="feat-t"><b>Медицина</b><span>Достань бинт на <kbd>2</kbd> и держи <kbd>ЛКМ</kbd>. Аптечки на поле, медики лечат и выносят раненых, койки в домах лечат быстрее.</span></div>
+            </li>
+            <li class="steel" style="--i:3">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8.5-7 10-4-1.5-7-5-7-10V6z"/></svg></div>
+              <div class="feat-t"><b>Снаряжение</b><span>Каска и бронежилет принимают удар на себя и ломаются. Новый комплект ждёт на станциях брони.</span></div>
+            </li>
+            <li class="amber" style="--i:4">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg></div>
+              <div class="feat-t"><b>Оружие</b><span>Автомат с перезарядкой и гранаты: держи <kbd>ПКМ</kbd> — цель, отпусти — бросок. Бетон рикошетит пули, мешки и траншеи их глотают.</span></div>
+            </li>
+            <li class="pink" style="--i:5">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><path d="M12 3v13M7 11l5 5 5-5M5 21h14"/></svg></div>
+              <div class="feat-t"><b>Угрозы с неба</b><span>Ракеты, налёты штурмовика и сверхмощный удар. Всё с предупреждением на экране: время прятаться.</span></div>
+            </li>
+            <li style="--i:6">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="2.5"/><circle cx="16" cy="8" r="2.5"/><path d="M3 20c0-3.5 2.5-6 5-6s5 2.5 5 6M11 20c0-3.5 2.5-6 5-6s5 2.5 5 6"/></svg></div>
+              <div class="feat-t"><b>Отряд и враги</b><span>Отряд идёт строем и прячется за укрытиями. Враги приходят группами: есть снайперы и пулемётчики в домах.</span></div>
+            </li>
+            <li class="amber" style="--i:7">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><path d="M3 19l6-10 4 6 3-4 5 8z"/></svg></div>
+              <div class="feat-t"><b>Поле боя</b><span>Мешки с песком, бетонные барьеры, траншеи, колючка, дома и воронки. Мини-карта показывает путь до базы.</span></div>
+            </li>
+            <li class="blue" style="--i:8">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></div>
+              <div class="feat-t"><b>Слух</b><span>Звон рикошета о каску слышат враги и идут на звук.</span></div>
+            </li>
+            <li class="red" style="--i:9">
+              <div class="feat-ic"><svg viewBox="0 0 24 24"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M8 9l8-6M8 14h4M15 14h1M8 17h8"/></svg></div>
+              <div class="feat-t"><b>Рация и итоги</b><span>Гибель бойца звучит по рации: «ПОЗЫВНОЙ — 200». После смерти видно причину, дистанцию и статистику боя.</span></div>
+            </li>
           </ul>
         </section>
       </div>
@@ -67,6 +100,9 @@
 
   <script src="health.js"></script>
   <script src="animations.js"></script>
+  <script src="ragdoll.js"></script>
+  <script src="fx.js"></script>
+  <script src="ai.js"></script>
   <script src="render.js"></script>
   <script src="main.js"></script>
 </body>

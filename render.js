@@ -121,6 +121,7 @@ function drawUnit() {
 		if (s.a === 'pelvis' && s.b === 'chest' && hero.isMedic) drawMedicCross(s);
 		drawWounds(si, s);
 		drawBand(s, si);
+		if (s.b === 'wristB' && hero.reloadT > 0 && hero.magHand) drawReloadMag();   // магазин в ладони дальней руки: за телом и за оружием
 		if (s.a === 'pelvis' && s.b === 'chest') {
 			drawBelt();
 			if (!held) drawSling();
@@ -319,6 +320,30 @@ function drawSling() {
 	ctx.lineTo(p.x + ux * 12 - nx * 13, p.y + uy * 12 - ny * 13);
 	ctx.stroke();
 	ctx.restore();
+}
+function drawReloadMag() {                                 // магазин и кисть дальней руки на её слое (позади тела и оружия)
+	const h = hero, w = h.p.wristB;
+	const flip = Math.cos(h.aimA) < 0 ? -1 : 1;
+	const t = 1 - h.reloadT / h.reloadMax;
+	const k = h.magHand === 'new' ? ease(Math.max(0, Math.min(1, (t - 0.62) / 0.16))) : 1;   // новый магазин из подсумка держится вертикально, потом выравнивается по оружию
+	ctx.save();
+	ctx.translate(w.x, w.y);
+	ctx.rotate(lerpAng(flip < 0 ? Math.PI : 0, h.aimA, k));
+	ctx.scale(1, flip);
+	ctx.lineWidth = 1.5;
+	ctx.lineJoin = 'round';
+	ctx.strokeStyle = '#111';
+	ctx.fillStyle = h.sniper ? '#2a2a22' : '#1f1f18';
+	ctx.beginPath();
+	if (h.sniper) { ctx.moveTo(-3, -6); ctx.lineTo(5, -6); ctx.lineTo(3, 5); ctx.lineTo(-4, 5); }
+	else { ctx.moveTo(-8, -9); ctx.lineTo(0, -9); ctx.quadraticCurveTo(2, 1, 8, 7); ctx.lineTo(1, 9); ctx.quadraticCurveTo(-6, 2, -8, -9); }
+	ctx.closePath();
+	ctx.fill(); ctx.stroke();
+	ctx.restore();
+	ctx.fillStyle = COLORS.skinDark;                       // пальцы поверх магазина
+	ctx.beginPath();
+	ctx.arc(w.x, w.y, 4, 0, Math.PI * 2);
+	ctx.fill(); ctx.stroke();
 }
 function drawHands() {
 	const h = hero;
@@ -961,7 +986,8 @@ function drawDust() {
     : '';
 }
 function drawSandbags(c) {
-  for (let r = 0; r < 3; r++) bagRow(c.x + r * 10, GROUND + 2 - r * 14, c.w - r * 20, c.s + r * 50);
+  const rows = Math.round((c.h - 14.5) / 14) + 1;
+  for (let r = 0; r < rows; r++) bagRow(c.x + r * 4, GROUND + 2 - r * 14, c.w - r * 8, c.s + r * 50);
 }
 function drawBarrier(c) {
   ctx.lineWidth = 2;
@@ -1213,21 +1239,24 @@ function drawHouseRoof(c) {
 // небо: градиент к горизонту, солнце в дымке, облака
 function drawSky() {
   skyT++;
-  const g = ctx.createLinearGradient(0, 0, 0, GROUND);
-  g.addColorStop(0, '#4d5b6a');
-  g.addColorStop(0.55, '#8d9486');
-  g.addColorStop(1, '#d1c29a');
-  ctx.fillStyle = g;
+  ctx.fillStyle = cachedGrad('sky', () => {
+    const g = ctx.createLinearGradient(0, 0, 0, GROUND);
+    g.addColorStop(0, '#4d5b6a'); g.addColorStop(0.55, '#8d9486'); g.addColorStop(1, '#d1c29a');
+    return g;
+  });
   ctx.fillRect(0, 0, W, H);
 
   const sx = W * 0.72 - camX * 0.01, sy = GROUND * 0.42;      // тусклое солнце сквозь дым
-  const sg = ctx.createRadialGradient(sx, sy, 6, sx, sy, 280);
-  sg.addColorStop(0, 'rgba(255,240,195,0.95)');
-  sg.addColorStop(0.08, 'rgba(255,228,170,0.6)');
-  sg.addColorStop(0.35, 'rgba(255,215,150,0.18)');
-  sg.addColorStop(1, 'rgba(255,215,150,0)');
-  ctx.fillStyle = sg;
-  ctx.fillRect(0, 0, W, GROUND);
+  ctx.save();
+  ctx.translate(sx, sy);                                      // градиент солнца строится вокруг (0, 0) и кэшируется; двигаем его translate-ом
+  ctx.fillStyle = cachedGrad('sun', () => {
+    const sg = ctx.createRadialGradient(0, 0, 6, 0, 0, 280);
+    sg.addColorStop(0, 'rgba(255,240,195,0.95)'); sg.addColorStop(0.08, 'rgba(255,228,170,0.6)');
+    sg.addColorStop(0.35, 'rgba(255,215,150,0.18)'); sg.addColorStop(1, 'rgba(255,215,150,0)');
+    return sg;
+  });
+  ctx.fillRect(-sx, -sy, W, GROUND);
+  ctx.restore();
 
   const f = 0.06, cell = 380;                                 // облака: медленный параллакс
   const i0 = Math.floor((camX * f + skyT * 0.15) / cell) - 1, i1 = Math.floor((camX * f + skyT * 0.15 + W) / cell) + 1;
@@ -1317,10 +1346,11 @@ function drawBackdrop() {
     if (r < 0.4) continue;                                     // между домами пустыри
     const bw = 70 + r * 80, bh = 90 + hash(i + worldSeed) * 130;
     const bx = i * cell - camX * f + hash(i * 1.3 + worldSeed) * 60;
-    const bg = ctx.createLinearGradient(0, GROUND - bh, 0, GROUND);
-    bg.addColorStop(0, '#6a7362');
-    bg.addColorStop(1, '#4b5345');
-    ctx.fillStyle = bg;
+    ctx.fillStyle = cachedGrad('bg' + Math.round(bh), () => {      // градиент зависит только от высоты дома, не от X
+      const g = ctx.createLinearGradient(0, GROUND - bh, 0, GROUND);
+      g.addColorStop(0, '#6a7362'); g.addColorStop(1, '#4b5345');
+      return g;
+    });
     ctx.beginPath();
     ctx.moveTo(bx, GROUND);
     ctx.lineTo(bx, GROUND - bh);
@@ -1442,9 +1472,11 @@ function bagRow(x, y, w, seed) {
   }
 }
 // мини-карта пути: отряд, враги, база, ракеты в полёте, зона ракет и участок обстрела
+let miniN = 0, miniW = 400;
 function drawMinimap() {
   const m = hudProg.mini, g = hudProg.mctx;
-  const w = m.clientWidth || 400;
+  if (!(miniN++ % 30)) miniW = m.clientWidth || 400;     // ширину читаем раз в полсекунды: чтение clientWidth каждый кадр форсирует перерасчёт раскладки
+  const w = miniW;
   if (m.width !== w) m.width = w;
   const h = m.height, padX = 12, yb = 28;
   const mx = x => padX + Math.max(0, Math.min(1, (x - START_X) / (FINISH_X - START_X))) * (w - padX * 2);
@@ -1514,6 +1546,93 @@ function drawMinimap() {
   g.fillStyle = '#fff'; g.strokeStyle = '#10130a'; g.lineWidth = 1.5;
   g.beginPath(); g.moveTo(me, yb - 3); g.lineTo(me - 5, yb - 13); g.lineTo(me + 5, yb - 13); g.closePath(); g.fill(); g.stroke();
 }
+// ===== Экран гибели / победы =====
+const END_SRC = {
+  rifle: 'вражеский стрелок', sniper: 'вражеский снайпер', mg: 'пулемётчик в доме', ricochet: 'рикошет',
+  strafe: 'налёт авиации', rocket: 'ракетный удар', mega: 'сверхмощная ракета', grenade: 'своя граната'
+};
+const END_PART = { head: 'голова', torso: 'торс', arms: 'рука', legs: 'нога' };
+const END_MARK = { head: [55, 28], torso: [55, 86], arms: [21, 90], legs: [43, 168] };   // где рисуем метку на фигурке
+const endTime = fr => { const s = Math.floor(fr / 60); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+// причина смерти словами: заголовок, строка об источнике и теги
+function endCause(d) {
+  let cause;
+  if (d.cause === 'blood') cause = 'Кровопотеря';
+  else if (d.how === 'blast') cause = 'Взрывная волна';
+  else if (d.how === 'frag') cause = 'Осколок в голову';
+  else cause = { sniper: 'Выстрел снайпера в голову', mg: 'Пулемётная очередь в голову', ricochet: 'Рикошет в голову', strafe: 'Пули штурмовика в голову' }[d.src] || 'Выстрел в голову';
+  let who = END_SRC[d.src] || 'неизвестно';
+  if (d.src === 'ricochet' && d.by === 'player') who = 'твой собственный рикошет';
+  let src = d.cause === 'blood' ? 'Ранение: ' + (END_PART[d.part] || 'тело') + ' · ' + who : 'Источник: ' + who;
+  if (d.dist >= 5) src += ' · ' + Math.round(d.dist) + ' м';
+  const chips = [];
+  if (d.cause === 'head') chips.push(d.helmet > 0 ? ['Каска не спасла', 'warn'] : ['Каска была разрушена', 'bad']);
+  if (d.cause === 'blood') chips.push(d.wound[d.part] ? ['Рана не была перевязана', 'bad'] : ['Кровь не остановили вовремя', 'warn']);
+  if (d.armor <= 0) chips.push(['Бронежилет разрушен', 'warn']);
+  if (d.pain > 0.8) chips.push(['Болевой шок', 'warn']);
+  if (d.concussion > 0.7) chips.push(['Контузия', 'info']);
+  return { cause, src, chips };
+}
+// фигурка бойца: поражённая часть подсвечена, каска и жилет — как было на момент смерти
+function endFigure(d) {
+  const part = d.part, m = END_MARK[part];
+  const cls = p => 'p' + (part === p ? ' hit' : '');
+  let drips = '';
+  if (m && d.cause === 'blood') for (let i = 0; i < 3; i++) drips += '<circle class="drip" style="animation-delay:' + (i * 0.45) + 's" cx="' + (m[0] - 8 + i * 8) + '" cy="' + (m[1] + 14) + '" r="2.6"/>';
+  return '<svg viewBox="0 0 110 220" class="es-svg">'
+    + '<rect class="' + cls('arms') + '" x="12" y="54" width="16" height="70" rx="8"/><rect class="' + cls('arms') + '" x="82" y="54" width="16" height="70" rx="8"/>'
+    + '<rect class="' + cls('legs') + '" x="33" y="126" width="20" height="84" rx="9"/><rect class="' + cls('legs') + '" x="57" y="126" width="20" height="84" rx="9"/>'
+    + '<rect class="' + cls('torso') + '" x="30" y="48" width="50" height="82" rx="12"/>'
+    + '<circle class="' + cls('head') + '" cx="55" cy="26" r="17"/>'
+    + (d.helmet > 0 ? '<path class="gear helm" d="M37 25a18 18 0 0 1 36 0z"/>' : '')
+    + (d.armor > 0 ? '<rect class="gear vest" x="36" y="56" width="38" height="46" rx="8"/>' : '')
+    + (m ? '<g class="mark" transform="translate(' + m[0] + ' ' + m[1] + ')"><circle r="13"/><path d="M-21 0H-8M8 0H21M0-21V-8M0 8V21"/></g>' : '')
+    + drips + '</svg>';
+}
+function endHtml(dead) {
+  const st = playerHealth.state;
+  const d = dead ? (st.death || { cause: 'blood', wound: {} }) : { cause: 'win', part: null, helmet: st.helmet, armor: st.armor, wound: {} };
+  const total = Math.round((FINISH_X - START_X) / 10);
+  const done = dead ? Math.round(Math.max(0, Math.min(FINISH_X, hero.p.pelvis.x) - START_X) / 10) : total;
+  const pct = dead ? Math.min(99, Math.round(done / total * 100)) : 100;
+  const alive = squad.filter(a => !a.health.state.dead).length;
+  const acc = stats.shots ? Math.round(Math.min(stats.hits, stats.shots) / stats.shots * 100) : -1;
+  const r = dead ? endCause(d) : { cause: 'Вы добрались до базы', src: 'Бойцов в строю: ' + alive + ' из ' + squad.length, chips: [] };
+  const stat = (i, val, label, sub, num, suf) =>
+    '<div class="es-stat es-a" style="--i:' + i + '"><b' + (num != null ? ' data-to="' + num + '"' + (suf ? ' data-suf="' + suf + '"' : '') : '') + '>' + val + (num != null && suf ? suf : '') + '</b><span>' + label + '</span>' + (sub ? '<em>' + sub + '</em>' : '') + '</div>';
+  return '<div class="es-tag es-a" style="--i:0">' + (dead ? 'БОЕЦ ВЫБЫЛ ИЗ СТРОЯ' : 'ЗАДАНИЕ ВЫПОЛНЕНО') + '</div>'
+    + '<div class="es-title">' + (dead ? 'Погиб' : 'Победа') + '</div>'
+    + '<div class="es-rule es-a" style="--i:1"></div>'
+    + '<div class="es-cause es-a" style="--i:2">' + r.cause + '</div>'
+    + '<div class="es-src es-a" style="--i:3">' + r.src + '</div>'
+    + (r.chips.length ? '<div class="es-chips es-a" style="--i:3">' + r.chips.map(c => '<span class="chip ' + c[1] + '">' + c[0] + '</span>').join('') + '</div>' : '')
+    + '<div class="es-body">'
+    + '<div class="es-fig es-a" style="--i:4">' + endFigure(d) + '<div class="es-cap">' + (dead ? (END_PART[d.part] || 'тело') : 'в строю') + '</div></div>'
+    + '<div class="es-stats">'
+    + stat(4, stats.kills, 'Убито врагов', 'лично: ' + stats.mine, stats.kills)
+    + stat(5, done, 'Пройдено', 'из ' + total + ' м', done, ' м')
+    + stat(6, endTime(stats.frames), 'Время в бою', '')
+    + stat(7, acc < 0 ? '—' : acc + '%', 'Меткость', stats.shots ? 'попаданий: ' + Math.min(stats.hits, stats.shots) + ' из ' + stats.shots : 'не стрелял')
+    + stat(8, alive + '/' + squad.length, 'Отряд в строю', 'потери: ' + (squad.length - alive))
+    + stat(9, stats.nades, 'Гранат брошено', '', stats.nades)
+    + '</div></div>'
+    + '<div class="es-route es-a" style="--i:10"><div class="es-route-top"><span>старт</span><span>' + (dead ? 'точка гибели · ' + pct + '% пути' : 'путь пройден полностью') + '</span><span>база</span></div>'
+    + '<div class="es-track" style="--pct:' + pct + '%"><i></i><u></u></div></div>'
+    + '<div class="es-hint es-a" style="--i:11"><kbd>Enter</kbd> начать заново · <kbd>Esc</kbd> меню</div>';
+}
+function endCountUp(root) {                                  // числа на карточке набегают от нуля
+  for (const el of root.querySelectorAll('[data-to]')) {
+    const to = +el.dataset.to, suf = el.dataset.suf || '';
+    el.textContent = '0' + suf;
+    const t0 = performance.now() + 1000;                     // после появления карточки
+    const tick = now => {
+      const u = Math.max(0, Math.min(1, (now - t0) / 1100));
+      el.textContent = Math.round(to * (1 - Math.pow(1 - u, 3))) + suf;
+      if (u < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+}
 let hudProg = null;
 function drawHud() {
   if (!hudProg) {
@@ -1527,10 +1646,10 @@ function drawHud() {
     root.appendChild(label); root.appendChild(mini);
     const end = document.createElement('div');
     end.id = 'endscreen';
-    end.innerHTML = '<div class="es-title"></div><div class="es-sub"></div><div class="es-hint"><kbd>Enter</kbd> начать заново</div>';
+    end.innerHTML = '<div class="es-veil"></div><div class="es-card"></div>';
     document.body.appendChild(root);
     document.body.appendChild(end);
-    hudProg = { label, mini, mctx: mini.getContext('2d'), end, title: end.querySelector('.es-title'), sub: end.querySelector('.es-sub'), endKey: '' };
+    hudProg = { label, mini, mctx: mini.getContext('2d'), end, card: end.querySelector('.es-card'), endKey: '' };
   }
   drawMinimap();
   const left = Math.max(0, Math.round((FINISH_X - hero.p.pelvis.x) / 10));
@@ -1541,23 +1660,29 @@ function drawHud() {
   if (endKey !== hudProg.endKey) {                         // карточку обновляем только при смене состояния
     hudProg.endKey = endKey;
     hudProg.end.className = endKey;
-    if (dead) {
-      const done = Math.round(Math.max(0, hero.p.pelvis.x - START_X) / 10), total = Math.round((FINISH_X - START_X) / 10);
-      hudProg.title.textContent = 'ПОГИБ';
-      hudProg.sub.textContent = 'Пройдено ' + done + ' м из ' + total + ' м';
-    } else if (won) {
-      hudProg.title.textContent = 'ЗАДАНИЕ ВЫПОЛНЕНО';
-      hudProg.sub.textContent = 'Вы добрались до базы · бойцов в строю: ' + alive + '/' + squad.length;
+    if (endKey) {
+      hudProg.card.innerHTML = endHtml(dead);
+      endCountUp(hudProg.card);
     }
   }
+}
+const gradCache = new Map();
+let gradKey = '';
+function cachedGrad(name, make) {                          // градиент строится один раз и пересоздаётся только при смене размера окна
+  const k = W + 'x' + H + 'x' + GROUND;
+  if (k !== gradKey) { gradCache.clear(); gradKey = k; }
+  let g = gradCache.get(name);
+  if (!g) { g = make(); gradCache.set(name, g); }
+  return g;
 }
 function drawGrade() {
   ctx.fillStyle = 'rgba(255,200,120,0.05)';
   ctx.fillRect(0, 0, W, H);
-  const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.8);
-  g.addColorStop(0, 'rgba(0,0,0,0)');
-  g.addColorStop(1, 'rgba(10,12,6,0.35)');
-  ctx.fillStyle = g;
+  ctx.fillStyle = cachedGrad('grade', () => {
+    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.8);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(10,12,6,0.35)');
+    return g;
+  });
   ctx.fillRect(0, 0, W, H);
 }
 // мелкие позывные над головами живых бойцов отряда
@@ -1613,11 +1738,11 @@ function drawCallouts() {
 function render() {
   drawSky();
   drawBackdrop();
-  const gg = ctx.createLinearGradient(0, GROUND, 0, H);               // земля: светлее у горизонта, темнее к низу
-  gg.addColorStop(0, '#566033');
-  gg.addColorStop(0.4, '#3a4126');
-  gg.addColorStop(1, '#232814');
-  ctx.fillStyle = gg;
+  ctx.fillStyle = cachedGrad('ground', () => {                        // земля: светлее у горизонта, темнее к низу
+    const g = ctx.createLinearGradient(0, GROUND, 0, H);
+    g.addColorStop(0, '#566033'); g.addColorStop(0.4, '#3a4126'); g.addColorStop(1, '#232814');
+    return g;
+  });
   ctx.fillRect(0, GROUND, W, H - GROUND);
   ctx.fillStyle = '#7a8450';
   ctx.fillRect(0, GROUND, W, 2);
@@ -1628,8 +1753,8 @@ function render() {
   drawGroundDetails();
   drawBloodPools();
   drawWorldBack();
-  for (const a of squad) runAs(a, drawUnit);
-  for (const e of foes) runAs(e, drawUnit);
+  for (const a of squad) if (onScreen(a.hero.p.pelvis.x - 600, 1200)) runAs(a, drawUnit);   // запас 600 px: отлетевшие конечности ещё видны
+  for (const e of foes) if (onScreen(e.hero.p.pelvis.x - 600, 1200)) runAs(e, drawUnit);
   drawUnit();
   drawWorldFront();
   for (const e of effects) {

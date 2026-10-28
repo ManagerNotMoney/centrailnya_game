@@ -4,6 +4,8 @@
 const ARMOR_MAX = 80;   // прочность бронежилета
 const CONCUSS_KO = 0.7; // контузия от 70% и выше — боец без сознания и не может встать
 const PAIN_SHOCK = 0.8; // боль выше 80% — болевой шок: боец без сознания, пока боль не спадёт
+const TOTAL_BLOOD_L = 5;    // 100% крови = 5 литров (только для показа игроку)
+const BLOOD_STEP_L = 0.5;   // показываем примерно, с шагом 500 мл
 const WAKE_GRACE = 600; // кадров (10 с): очнувшийся через силу не отключается снова от контузии / шока
 const TORSO_STAND_MIN = 15; // торс разрушен (0%) — встать нельзя, пока он не восстановится хотя бы до 15%
 const LEGS_WALK_MIN = 10;   // ноги в 0% — одна нога волочится, пока ноги не восстановятся хотя бы до 10%
@@ -38,13 +40,35 @@ const makeHealth = (isPlayer) => {
       lame: false,       // ноги в 0%: волочит одну ногу
       dragLeg: 'B',      // какую ногу волочит ('B' или 'F')
       dead: false,
+      death: null,        // причина смерти: { cause: 'head' | 'blood', src, how, dist, by, part, ... } (см. kill)
+      lastHit: null,      // последнее попадание: { src, how, dist, by, part }
+      bleedFrom: null,    // последнее попадание, от которого пошла кровь
       wound: { head: false, torso: false, arms: false, legs: false } // части с открытой раной (нужна перевязка)
     });
   }
   reset();
 
+  // запоминаем, чем и куда попали (info: { src, how: 'bullet' | 'frag' | 'blast', dist, by })
+  function note(part, info, bleeding) {
+    if (!info) return;
+    state.lastHit = { src: info.src, how: info.how, dist: info.dist || 0, by: info.by, part };
+    if (bleeding) state.bleedFrom = state.lastHit;
+  }
+  // смерть: 'head' — голова разрушена, 'blood' — кровопотеря; сохраняем снимок для экрана гибели
+  function kill(cause) {
+    if (state.dead) return;
+    state.dead = true;
+    const h = (cause === 'blood' && state.bleedFrom) || state.lastHit || {};
+    state.death = {
+      cause, src: h.src || null, how: h.how || null, dist: h.dist || 0, by: h.by || null,
+      part: cause === 'head' ? 'head' : (h.part || null),
+      helmet: state.helmet, armor: state.armor, wound: Object.assign({}, state.wound),
+      pain: state.pain, concussion: state.concussion
+    };
+  }
+
   // hits: { имя_сустава: сила_попадания 0..1 }
-  function onBlast(hits) {
+  function onBlast(hits, info) {
     if (state.dead) return;
 
     const worst = { head: 0, torso: 0, arms: 0, legs: 0 };
@@ -71,6 +95,9 @@ const makeHealth = (isPlayer) => {
       if (k > 0.5) state.bleed += k * 0.8;
     }
 
+    const bp = Object.keys(worst).reduce((a, b) => worst[b] > worst[a] ? b : a);
+    if (worst[bp] > 0) note(bp, info, worst[bp] > 0.5);
+
     // контузия: голова важнее всего, но близкий взрыв контузит и без прямого попадания по голове
     const overall = Math.max(worst.head, worst.torso, worst.arms, worst.legs);
     const c = Math.max(worst.head, overall * 0.8);
@@ -80,7 +107,7 @@ const makeHealth = (isPlayer) => {
     }
     if (c > 0.75) state.ko = Math.max(state.ko, Math.round(120 + c * 240)); // потеря сознания
 
-    if (state.parts.head <= 0) state.dead = true;   // торс на 0% не убивает, а лишает возможности встать (см. state.broken)
+    if (state.parts.head <= 0) kill('head');   // торс на 0% не убивает, а лишает возможности встать (см. state.broken)
   }
 
   // каска поглощает урон, пока не разрушится; в голову проходит ≈20% поглощённого + весь остаток
@@ -100,7 +127,7 @@ const makeHealth = (isPlayer) => {
   }
 
   // попадание осколка / пули в сустав name
-  function onShrapnel(name, mul = 1) {
+  function onShrapnel(name, mul = 1, info) {
     if (state.dead) return;
     const part = PART_OF[name.replace(/[BF]$/, '')];
     let dmg = (part === 'head' ? 18 : part === 'torso' ? 10 : 6) * mul;
@@ -119,8 +146,9 @@ const makeHealth = (isPlayer) => {
       state.bleed += dmg / 25;
       state.wound[part] = true;
     }
+    note(part, info, !state.blocked);
     if (part === 'head') state.concussion = Math.min(1, state.concussion + (state.blocked ? 0.08 : 0.15));
-    if (state.parts.head <= 0) state.dead = true;   // торс на 0% не убивает, а лишает возможности встать (см. state.broken)
+    if (state.parts.head <= 0) kill('head');   // торс на 0% не убивает, а лишает возможности встать (см. state.broken)
   }
 
   // добавить крови (переливание)
@@ -191,7 +219,7 @@ const makeHealth = (isPlayer) => {
     state.shock = state.pain > PAIN_SHOCK;
     if (state.shock && state.groggy === 0) state.ko = Math.max(state.ko, 2);                      // болевой шок — без сознания, пока боль не спадёт
     if (state.blood < 30 && state.ko === 0 && Math.random() < 0.0005) state.ko = 180; // обморок
-    if (state.blood <= 0) state.dead = true;
+    if (state.blood <= 0) kill('blood');
   }
 
   const conscious = () => !state.dead && state.ko === 0;
@@ -292,6 +320,56 @@ const makeHealth = (isPlayer) => {
     // индикаторы и надписи лежат в обычных HTML-элементах: размытие холста их не трогает (стили — в style.css)
   let hud = null;
   const PIPS = 8;                                       // сегментов у каски и брони
+  // кровь на глаз: примерное количество литров с шагом 500 мл
+  function bloodText(S) {
+    if (S.dead) return '0 л';
+    const r = Math.round(Math.max(0, S.blood) / 100 * TOTAL_BLOOD_L / BLOOD_STEP_L) * BLOOD_STEP_L;
+    if (r <= 0) return '< 0,5 л';
+    return '≈ ' + String(r).replace('.', ',') + ' л';
+  }
+  // состояние словами вместо полосок: самое тяжёлое — первым, не больше 6 ярлыков
+  function describe(S) {
+    if (S.dead) return [['ПОГИБ', 'bad']];
+    const o = [];                                                       // [текст, класс, важность]
+    const add = (t, c, w) => o.push([t, c, w]);
+    if (S.ko > 0) add(S.shock ? 'БОЛЕВОЙ ШОК' : 'БЕЗ СОЗНАНИЯ', 'bad', 100);
+    else if (S.shock) add('БОЛЕВОЙ ШОК', 'warn', 90);                   // очнулся через силу, но боль всё ещё выше порога
+    // кровопотеря
+    if (S.blood < 30) add('КРИТИЧЕСКАЯ КРОВОПОТЕРЯ', 'bad', 95);
+    else if (S.blood < 50) add('ТЯЖЁЛАЯ КРОВОПОТЕРЯ', 'bad', 80);
+    else if (S.blood < 70) add('КРОВОПОТЕРЯ', 'warn', 60);
+    else if (S.blood < 92.5) add('ЛЁГКАЯ КРОВОПОТЕРЯ', 'info', 30);
+    // кровотечение (S.bleed — % крови в секунду)
+    if (S.bleed > 1) add('ХЛЕЩЕТ КРОВЬ', 'bad', 92);
+    else if (S.bleed > 0.5) add('СИЛЬНОЕ КРОВОТЕЧЕНИЕ', 'bad', 85);
+    else if (S.bleed > 0.15) add('КРОВОТЕЧЕНИЕ', 'bad', 70);
+    else if (S.bleed > 0.03) add('СОЧИТСЯ КРОВЬ', 'warn', 50);
+    // раны по частям тела
+    const wp = ['head', 'torso', 'arms', 'legs'].filter(p => S.wound[p]);
+    const one = { head: 'РАНА ГОЛОВЫ', torso: 'РАНА ТОРСА', arms: 'РАНА РУКИ', legs: 'РАНА НОГИ' };
+    const many = { head: 'ГОЛОВА', torso: 'ТОРС', arms: 'РУКИ', legs: 'НОГИ' };
+    if (wp.length === 1) add(one[wp[0]], 'warn', 65);
+    else if (wp.length === 2) add('РАНЫ: ' + wp.map(p => many[p]).join(', '), 'warn', 66);
+    else if (wp.length > 2) add('МНОЖЕСТВЕННЫЕ РАНЫ', 'bad', 75);
+    if (S.broken) add('ТОРС РАЗРУШЕН', 'bad', 88);
+    if (S.lame) add('ХРОМОТА', 'warn', 55);
+    // боль (с PAIN_SHOCK — болевой шок, он выше)
+    if (!S.shock) {
+      if (S.pain > 0.65) add('НЕВЫНОСИМАЯ БОЛЬ', 'bad', 78);
+      else if (S.pain > 0.5) add('СИЛЬНАЯ БОЛЬ', 'warn', 58);
+      else if (S.pain > 0.25) add('БОЛЬ, ДРОЖЬ В РУКАХ', 'info', 40);
+      else if (S.pain > 0.1) add('ЛЁГКАЯ БОЛЬ', 'info', 20);
+    }
+    // контузия (с CONCUSS_KO — без сознания)
+    if (S.concussion >= CONCUSS_KO) add('ТЯЖЁЛАЯ КОНТУЗИЯ', 'bad', 94);
+    else if (S.concussion > 0.55) add('СИЛЬНАЯ КОНТУЗИЯ', 'bad', 72);
+    else if (S.concussion > 0.4) add('КОНТУЗИЯ', 'warn', 52);
+    else if (S.concussion > 0.15) add('ЛЁГКАЯ КОНТУЗИЯ', 'info', 35);
+    else if (S.concussion > 0.05) add('ЗВОН В УШАХ', 'info', 15);
+    if (S.groggy > 0) add('ОГЛУШЁН ' + Math.ceil(S.groggy / 60) + ' с', 'info', 45);
+    if (!o.length) return [['В НОРМЕ', 'ok']];
+    return o.sort((a, b) => b[2] - a[2]).slice(0, 6).map(([t, c]) => [t, c]);
+  }
   const partColor = v => 'hsl(' + Math.round(Math.max(0, Math.min(100, v)) * 0.95) + ',55%,' + Math.round(34 + v * 0.1) + '%)';   // 0 — красный, 100 — зелёный
 
   function buildHud() {
@@ -310,12 +388,8 @@ const makeHealth = (isPlayer) => {
         '<rect class="gear vest" x="20" y="30" width="20" height="22" rx="4"/>' +
       '</svg>' +
       '<div class="st-col">' +
-        '<div class="st-row"><span>Кровь</span><b data-val="blood">100%</b></div>' +
+        '<div class="st-row"><span>Кровь</span><b data-val="blood">≈ 5 л</b></div>' +
         '<div class="bar big"><i data-bar="blood"></i></div>' +
-        '<div class="st-row"><span>Боль</span></div>' +
-        '<div class="bar mark" style="--mark:' + PAIN_SHOCK * 100 + '%"><i data-bar="pain"></i></div>' +
-        '<div class="st-row"><span>Контузия</span></div>' +
-        '<div class="bar mark" style="--mark:' + CONCUSS_KO * 100 + '%"><i data-bar="conc"></i></div>' +
         '<div class="st-row"><span>Каска</span>' + pips('helm') + '</div>' +
         '<div class="st-row"><span>Броня</span>' + pips('armor') + '</div>' +
         '<div class="chips"></div>' +
@@ -329,7 +403,7 @@ const makeHealth = (isPlayer) => {
     hud = {
       root, msg, msgT: msg.firstChild, msgBarWrap: msg.lastChild, msgBar: msg.querySelector('i'), chipKey: '',
       parts: { head: q('[data-part="head"]'), torso: q('[data-part="torso"]'), arms: q('[data-part="arms"]'), legs: q('[data-part="legs"]') },
-      bars: { blood: q('[data-bar="blood"]')[0], pain: q('[data-bar="pain"]')[0], conc: q('[data-bar="conc"]')[0] },
+      bars: { blood: q('[data-bar="blood"]')[0] },
       val: q('[data-val="blood"]')[0],
       pips: { helm: q('[data-pips="helm"] i'), armor: q('[data-pips="armor"] i') },
       helm: q('.gear.helm')[0], vest: q('.gear.vest')[0],
@@ -347,12 +421,10 @@ const makeHealth = (isPlayer) => {
       }
     }
     const bar = (k, v) => { hud.bars[k].style.width = (Math.max(0, Math.min(1, v)) * 100).toFixed(1) + '%'; };
-    bar('blood', S.blood / 100); bar('pain', S.pain); bar('conc', S.concussion);
-    hud.val.textContent = Math.round(Math.max(0, S.blood)) + '%';
+    bar('blood', S.blood / 100);
+    hud.val.textContent = bloodText(S);
     hud.root.classList.toggle('low', !S.dead && S.blood < 35);
     hud.root.classList.toggle('shock', !S.dead && S.shock);
-    hud.bars.pain.classList.toggle('over', !S.dead && S.pain > PAIN_SHOCK);               // боль за порогом шока
-    hud.bars.conc.classList.toggle('over', !S.dead && S.concussion >= CONCUSS_KO);        // контузия за порогом потери сознания
     const calm = !S.dead && S.blood > 99.5 && S.pain < 0.05 && S.concussion < 0.05 && S.ko === 0 && S.groggy === 0
       && !S.broken && !S.lame && !(S.wound.head || S.wound.torso || S.wound.arms || S.wound.legs)
       && S.parts.head > 99 && S.parts.torso > 99 && S.parts.arms > 99 && S.parts.legs > 99;
@@ -364,23 +436,7 @@ const makeHealth = (isPlayer) => {
     pip('helm', S.helmet / HELMET_MAX); pip('armor', S.armor / ARMOR_MAX);
     hud.helm.style.opacity = S.helmet > 0 ? 0.35 + 0.65 * S.helmet / HELMET_MAX : 0;   // каска и жилет видны на силуэте
     hud.vest.style.opacity = S.armor > 0 ? 0.35 + 0.65 * S.armor / ARMOR_MAX : 0;
-    const chips = [];
-    if (S.dead) chips.push(['ПОГИБ', 'bad']);
-    else {
-      if (S.ko > 0) chips.push([S.shock ? 'БОЛЕВОЙ ШОК' : 'БЕЗ СОЗНАНИЯ', 'bad']);
-      else if (S.shock) chips.push(['БОЛЕВОЙ ШОК', 'warn']);          // очнулся через силу, но боль всё ещё выше порога
-      else if (S.pain > 0.5) chips.push(['СИЛЬНАЯ БОЛЬ', 'warn']);
-      else if (S.pain > 0.25) chips.push(['ДРОЖЬ', 'info']);
-      if (bleeding) chips.push(['КРОВОТЕЧЕНИЕ', 'bad']);
-      else if (S.wound.head || S.wound.torso || S.wound.arms || S.wound.legs) chips.push(['РАНА', 'warn']);
-      if (S.broken) chips.push(['ТОРС РАЗРУШЕН', 'bad']);
-      if (S.lame) chips.push(['ХРОМОТА', 'warn']);
-      if (S.concussion >= CONCUSS_KO) chips.push(['ТЯЖЁЛАЯ КОНТУЗИЯ', 'bad']);
-      else if (S.concussion > 0.4) chips.push(['КОНТУЗИЯ', 'warn']);
-      else if (S.concussion > 0.15) chips.push(['ЛЁГКАЯ КОНТУЗИЯ', 'info']);
-      if (S.groggy > 0) chips.push(['ОГЛУШЁН ' + Math.ceil(S.groggy / 60) + ' с', 'info']);
-    }
-    if (!chips.length) chips.push(['В НОРМЕ', 'ok']);
+    const chips = describe(S);
     const key = chips.map(c => c.join(':')).join('|');
     if (key !== hud.chipKey) {                          // перерисовываем значки только при изменении
       hud.chipKey = key;

@@ -11,31 +11,12 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 resize();
-const GRAVITY = 0.5;
-const DAMPING = 0.995;
-const FRICTION = 0.35;
-const ITERATIONS = 12;
-
-const lerp = (a, b, t) => a + (b - a) * t;
-const MASS = { pelvis: 4, chest: 4, neck: 0.6, head: 1.5, elbow: 0.8, wrist: 0.5, knee: 1.2, ankle: 0.8, toe: 0.4 };
-const TIP_MARGIN = 14;
-const GRIP = 4;
-const S = { head: 26, neck: 12, torso: 62, upperArm: 34, foreArm: 32, thigh: 46, calf: 44, foot: 22 };
-const RADIUS = { pelvis: 8, chest: 8, neck: 4, head: 3, elbow: 4, wrist: 4, knee: 6, ankle: 5, toe: 5 };
-
-const COLORS = {
-  skin: '#e8b98e', skinDark: '#c98f68',
-  shirt: '#66783f', shirtDark: '#4d5c2e',
-  pants: '#55603a', pantsDark: '#3f4a2b',
-  boots: '#3a2e22', bootsDark: '#271e15',
-  helmet: '#4a5a33'
-};
+const effects = [];
 let hero;
 let standing = true;
 let stun = 0;
-const effects = [];
 let keys = {};
-const mouse = { x: 0, y: 0, sx: 0 };
+const mouse = { x: 0, y: 0, sx: W * 0.7 };
 let mouseDown = false;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const place = (from, ang, len) => ({ x: from.x + Math.sin(ang) * len, y: from.y + Math.cos(ang) * len });
@@ -135,45 +116,9 @@ function solveRange(r) {
   r.a.x += dx * k * wa; r.a.y += dy * k * wa;
   r.b.x -= dx * k * wb; r.b.y -= dy * k * wb;
 }
-function muscle(a, b, ox, oy, k, wa = 1, wb = 1, kx = 1) {
-  const ex = (a.x + ox - b.x) * kx, ey = a.y + oy - b.y;
-  const ia = wa / a.m, ib = wb / b.m;
-  const sum = ia + ib;
-  if (sum === 0) return;
-  b.x += ex * k * ib / sum; b.y += ey * k * ib / sum;
-  a.x -= ex * k * ia / sum; a.y -= ey * k * ia / sum;
-}
-function tipping(P) {
-  let mx = 0, mt = 0;
-  for (const n in P) { mx += P[n].x * P[n].m; mt += P[n].m; }
-  const com = mx / mt;
-  let lo = Infinity, hi = -Infinity;
-  for (const n of ['ankleB', 'ankleF', 'toeB', 'toeF']) {
-    const q = P[n];
-    if (q.y >= GROUND - q.r - 2) { lo = Math.min(lo, q.x); hi = Math.max(hi, q.x); }
-  }
-  return lo === Infinity ? 0 : Math.max(0, lo - com, com - hi);
-}
-function bendLimit(a, b, c, dir) {
-  const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
-  if (cross * dir < 0) {
-    const dx = c.x - a.x, dy = c.y - a.y;
-    const l2 = dx * dx + dy * dy || 1;
-    const t = ((b.x - a.x) * dx + (b.y - a.y) * dy) / l2;
-    const fx = a.x + dx * t, fy = a.y + dy * t;
-    b.x = 2 * fx - b.x;
-    b.y = 2 * fy - b.y;
-  }
-}
-function collide(p) {
-  if (p.y > GROUND - p.r) {
-    p.y = GROUND - p.r;
-    p.py = p.y;
-  }
-  if (p.x < p.r) p.x = p.r;
-  if (p.x > WORLD_W - p.r) p.x = WORLD_W - p.r;
-}
-function explode(x, y, R = 260, power = 1, shardMul = 1) {
+let blastSrc = 'grenade', blastBy = 'player';   // чей взрыв: нужно для причины смерти
+function explode(x, y, R = 260, power = 1, shardMul = 1, src = 'grenade', by = 'player') {
+  blastSrc = src; blastBy = by;
   runAll(() => blast(x, y, R, power));
   boom(x, y, power, shardMul);
 }
@@ -196,7 +141,7 @@ function blast(x, y, R, power) {
   if (hit > 0.2) stun = Math.max(stun, Math.round(40 + hit * 80));
   if (hit > 0.2 && hero.isPlayer) deafen(2 + Math.min(1, hit * Math.sqrt(power)));   // 2–3 с тишины, потом звук возвращается
   const wasDead = Health.state.dead;
-  Health.onBlast(hits);
+  Health.onBlast(hits, { src: blastSrc, how: 'blast', by: blastBy });
   if ((Health.state.dead || Health.state.parts.torso <= 0) && hit > DISMEMBER_K) dismember(hero, hits, x, power, wasDead);   // погиб или торс разрушен взрывом — отлетают конечности
 }
 function boom(x, y, power, shardMul = 1) {
@@ -209,6 +154,7 @@ function boom(x, y, power, shardMul = 1) {
   if (craters.length > 8) craters.shift();
   shake = Math.max(shake, 6 * power * Math.max(0.2, 1 - Math.abs(x - hero.p.pelvis.x) / 900));
 }
+const stats = { frames: 0, kills: 0, mine: 0, shots: 0, hits: 0, nades: 0 };   // для экрана гибели / победы
 const FUSE = 180;
 const SHARD_COUNT = 36;
 const grenades = [];
@@ -232,59 +178,74 @@ const HEAR_T = 240;                           // сколько кадров б�
 // ===== Патроны, перезарядка и отсоединяемый магазин (у всех бойцов) =====
 const MAG_SIZE = 30;         // патронов в магазине АК
 const SNIPER_MAG = 10;       // патронов у снайпера
-const RELOAD_T = 90;         // перезарядка АК, кадров (1,5 с)
-const SNIPER_RELOAD_T = 120; // перезарядка снайпера, кадров (2 с)
-const MAG_OUT_AT = 0.25;     // доля перезарядки, на которой магазин отсоединяется
-const MAG_IN_AT = 0.7;       // доля перезарядки, на которой вставлен новый
-const mags = [];             // упавшие на землю магазины
+const RELOAD_T = 84;         // перезарядка АК, кадров (1,4 с)
+const SNIPER_RELOAD_T = 110; // перезарядка снайпера, кадров
+const MAG_OUT_AT = 0.22;     // доля перезарядки: магазин вынут из оружия и остался в руке
+const MAG_DROP_AT = 0.34;    // старый магазин выброшен
+const MAG_GRAB_AT = 0.56;    // новый магазин достан из подсумка
+const MAG_IN_AT = 0.84;      // новый магазин вставлен (стрелять можно, рука ещё возвращается)
+
 const magSize = h => h.sniper ? SNIPER_MAG : MAG_SIZE;
 function startReload(h, hl = playerHealth) {               // R у игрока; у ботов вызывает aiShoot
   if (h.reloadT > 0 || (h.ammo >= magSize(h) && !h.magOut)) return;
   if (!h.gunWant || h.gun < 1 || h.getup || h.lie > 0.3 || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.carrying || h.bandaging || h.treat || !hl.conscious() || hl.state.dead) return;
   h.reloadMax = h.reloadT = h.sniper ? SNIPER_RELOAD_T : RELOAD_T;
+  if (h.magOut && !h.magHeld) h.reloadT = Math.round(h.reloadMax * (1 - MAG_DROP_AT));   // старый магазин уже выброшен — сразу к подсумку
 }
-function dropMag(h) {                                      // магазин вылетает из оружия и падает на землю
-  const c = h.p.chest, a = h.aimA, sn = !!h.sniper;
+function dropMag(h) {                                      // магазин выпадает из руки и падает на землю
+  const w = h.p.wristB, a = h.aimA, sn = !!h.sniper;
   const flip = Math.cos(a) < 0 ? -1 : 1;
-  const lx = sn ? 12 : 35, ly = (sn ? 10 : 13) * flip;     // где магазин в координатах оружия
   mags.push({
-    x: c.x + Math.cos(a) * lx - Math.sin(a) * ly,
-    y: c.y + Math.sin(a) * lx + Math.cos(a) * ly,
+    x: w.x, y: w.y,
     a, flip, sn,
-    vx: (Math.random() - 0.5) * 1.5 - h.f * 0.4, vy: 1 + Math.random(),
+    vx: h.f * (0.4 + Math.random() * 1.2), vy: 0.5 + Math.random(),
     va: (Math.random() - 0.5) * 0.3, life: 900
   });
   if (mags.length > 40) mags.shift();
 }
 function reloadStep(h) {                                   // вызывается для каждого бойца внутри stepHero
   if (!(h.reloadT > 0)) return;
-  if (!h.gunWant || h.getup || h.lie > 0.3 || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.bandaging || h.treat || !Health.conscious() || Health.state.dead) { h.reloadT = 0; return; }   // убрал оружие / упал / бросок — перезарядка сорвана
+  if (!h.gunWant || h.getup || h.lie > 0.3 || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.bandaging || h.treat || !Health.conscious() || Health.state.dead) {   // убрал оружие / упал / бросок — перезарядка сорвана
+    if (h.magHeld) { dropMag(h); h.magHeld = false; }      // магазин был в руке — роняем
+    h.reloadT = 0; return;
+  }
   h.reloadT--;
   const t = 1 - h.reloadT / h.reloadMax;
   if (t >= MAG_IN_AT) {
     if (h.magOut) { h.magOut = false; h.ammo = magSize(h); }     // новый магазин вставлен
-  } else if (t >= MAG_OUT_AT && !h.magOut) {
-    dropMag(h); h.magOut = true; h.ammo = 0;                     // старый магазин сброшен
+  } else {
+    if (t >= MAG_OUT_AT && !h.magOut) { h.magOut = true; h.magHeld = true; h.ammo = 0; }   // магазин вынут из оружия, остался в руке
+    if (t >= MAG_DROP_AT && h.magHeld) { dropMag(h); h.magHeld = false; }                  // отпустил — падает
   }
 }
-function reloadPose(h) {                                   // 0..1: насколько рука ушла к магазину
-  if (!(h.reloadT > 0)) return 0;
+function pouchPos(h) {                                     // подсумок на поясе (та же точка, что рисует drawBelt)
+  const P = h.p;
+  let ux = P.chest.x - P.pelvis.x, uy = P.chest.y - P.pelvis.y;
+  const l = Math.hypot(ux, uy) || 1; ux /= l; uy /= l;
+  const nx = -uy * h.f, ny = ux * h.f;
+  return { x: P.pelvis.x + ux * 5 + nx * 15, y: P.pelvis.y + uy * 5 + ny * 15 };   // кромка пояса: кисть дальней руки наполовину выглядывает из-за тела
+}
+// куда тянется опорная рука (wristB) во время перезарядки; gx — перевод координат оружия в мировые. null — не перезаряжаемся
+function reloadHand(h, gx) {
+  h.magHand = null;
+  if (!(h.reloadT > 0)) return null;
   const t = 1 - h.reloadT / h.reloadMax;
-  return t < 0.2 ? ease(t / 0.2) : t > 0.8 ? ease((1 - t) / 0.2) : 1;
+  const mx = h.sniper ? 12 : 34, my = h.sniper ? 10 : 13;  // середина магазина в координатах оружия
+  const H0 = gx(41, 2), Hm = gx(mx, my), Ho = gx(mx + 5, my + 18), Hu = gx(mx + 1, my + 17), Hp = pouchPos(h);
+  const seg = (a, b, u) => { const k = ease(Math.max(0, Math.min(1, u))); return { x: lerp(a.x, b.x, k), y: lerp(a.y, b.y, k) }; };
+  let p;
+  if (t < 0.14) p = seg(H0, Hm, t / 0.14);                              // от цевья к магазину
+  else if (t < MAG_OUT_AT) p = Hm;                                       // хват, щелчок фиксатора
+  else if (t < MAG_DROP_AT) p = seg(Hm, Ho, (t - MAG_OUT_AT) / (MAG_DROP_AT - MAG_OUT_AT));   // тянет магазин вниз
+  else if (t < MAG_GRAB_AT) p = seg(Ho, Hp, (t - MAG_DROP_AT) / (MAG_GRAB_AT - MAG_DROP_AT)); // к подсумку
+  else if (t < 0.62) p = Hp;                                             // достаёт новый
+  else if (t < 0.78) p = seg(Hp, Hu, (t - 0.62) / 0.16);                // несёт к оружию
+  else if (t < MAG_IN_AT) p = seg(Hu, Hm, (t - 0.78) / (MAG_IN_AT - 0.78));   // вставляет снизу вверх
+  else p = seg(Hm, H0, (t - MAG_IN_AT) / (1 - MAG_IN_AT));              // возвращается на цевьё
+  h.magHand = h.magHeld ? 'old' : (t >= MAG_GRAB_AT && t < MAG_IN_AT && h.magOut) ? 'new' : null;   // какой магазин сейчас в ладони
+  return p;
 }
-function updateMags() {
-  for (let i = mags.length - 1; i >= 0; i--) {
-    const m = mags[i];
-    m.vy += 0.5;
-    m.x += m.vx; m.y += m.vy; m.a += m.va;
-    if (m.y >= GROUND - 4) {
-      m.y = GROUND - 4;
-      m.vy = Math.abs(m.vy) > 3 ? -m.vy * 0.3 : 0;
-      m.vx *= 0.5; m.va *= 0.5;
-    }
-    if (--m.life <= 0) mags.splice(i, 1);
-  }
-}
+
 const ammoEl = document.getElementById('ammo');
 let ammoShown = '';
 function updateAmmoHud() {
@@ -366,6 +327,7 @@ function nadeStep(h) {
         const v = nadeLaunch(s.x, s.y, h.nadeTgt.x, h.nadeTgt.y);
         throwGrenade(s.x, s.y, v.vx, v.vy);
         nades--;
+        stats.nades++;
       }
       if (h.throwT <= 0) h.nadeCD = NADE_CD;
     }
@@ -434,7 +396,7 @@ function hitShard(s, seg, u) {
     p.px -= s.vx * 0.15;
     p.py -= s.vy * 0.15;
   }
-  u.health.onShrapnel(seg.b);
+  u.health.onShrapnel(seg.b, 1, { src: blastSrc, how: 'frag', by: blastBy });
   addWound(u, seg, s.x, s.y, 'frag', s.vx, s.vy);
 }
 function updateShards() {
@@ -501,7 +463,7 @@ function updateBigShards() {
               h.p[n].px -= s.vx * 0.25;
               h.p[n].py -= s.vy * 0.25;
             }
-            u.health.onShrapnel(seg.b, BIG_SHARD_DMG);
+            u.health.onShrapnel(seg.b, BIG_SHARD_DMG, { src: blastSrc, how: 'frag', by: blastBy });
             addWound(u, seg, s.x, s.y, 'embed', s.vx, s.vy);
             dead = true;
             break;
@@ -515,9 +477,10 @@ function updateBigShards() {
 }
 function shootUnit(h) {
 	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5 || h.bandaging || h.carrying || h.nadeAim || h.throwT > 0) return;
-	if (h.ammo <= 0 || h.reloadT > 0 || h.magOut) return;
+	if (h.ammo <= 0 || h.magOut || (h.reloadT > 0 && h.reloadT > h.reloadMax * (1 - MAG_IN_AT))) return;   // после вставки магазина стреляем, не дожидаясь, пока рука вернётся на цевьё
 	h.shootCD = h.sniper ? SNIPER_CD : SHOOT_CD;
 	h.ammo--;
+	if (h === hero) stats.shots++;
 	const ax = Math.cos(h.aimA), ay = Math.sin(h.aimA);
 	const sn = !!h.sniper;
 	const reach = sn ? 112 : 80;
@@ -525,7 +488,7 @@ function shootUnit(h) {
 	const my = h.p.chest.y + ay * reach;
 	const sa = h.aimA + (Math.random() - 0.5) * 2 * (h.spread || 0);   // разброс у ботов
 	const spd = sn ? SNIPER_SPEED : BULLET_SPEED;
-	bullets.push({ x: mx, y: my, px: mx, py: my, vx: Math.cos(sa) * spd, vy: Math.sin(sa) * spd, life: sn ? 70 : 90, foe: !!h.foe, sn, dmg: sn ? SNIPER_DMG : 2.5, sx: mx });
+	bullets.push({ x: mx, y: my, px: mx, py: my, vx: Math.cos(sa) * spd, vy: Math.sin(sa) * spd, life: sn ? 70 : 90, foe: !!h.foe, sn, dmg: sn ? SNIPER_DMG : 2.5, sx: mx, by: h === hero ? 'player' : h.foe ? 'enemy' : 'squad' });
 	flashes.push({ x: mx, y: my, a: h.aimA, life: 7, max: 7 });
 	// отдача: толкаем корпус и таз назад
 	const rec = sn ? 3 : 1;
@@ -541,6 +504,28 @@ function solidAt(x, y) {
 	}
 	return null;
 }
+// есть ли прямой выстрел из (x0, y0) в (x1, y1): на пути нет твёрдых объектов (мешки, барьер, траншея, стены дома)
+function clearShot(x0, y0, x1, y1) {
+	const lo = Math.min(x0, x1), hi = Math.max(x0, x1);
+	const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 10);
+	for (const c of props) {
+		if (c.deco || c.x > hi || c.x + c.w < lo) continue;     // объект не на пути
+		for (let i = 0; i <= n; i++) {
+			const u = n ? i / n : 0, x = x0 + (x1 - x0) * u, y = y0 + (y1 - y0) * u;
+			if (x > c.x && x < c.x + c.w && y > GROUND - c.h && (c.type !== 'house' || houseBlocks(c, x, y))) return false;
+		}
+	}
+	return true;
+}
+// долетит ли пуля из ствола бойца (грудь + 80 px в сторону цели) до точки t
+function shotClear(from, t) {
+	const dx = t.x - from.x, dy = t.y - from.y, d = Math.hypot(dx, dy) || 1, r = Math.min(80, d);
+	return clearShot(from.x + dx / d * r, from.y + dy / d * r, t.x, t.y);
+}
+// куда можно попасть: грудь, а если она закрыта — голова; null — цель полностью прикрыта
+function aimPoint(from, hero) {
+	return shotClear(from, hero.p.chest) ? hero.p.chest : shotClear(from, hero.p.head) ? hero.p.head : null;
+}
 // отражает скорость пули от поверхности с нормалью (nx, ny): потеря скорости keep, случайный разброс ±11°
 function bounceBullet(b, nx, ny, keep) {
 	const dot = b.vx * nx + b.vy * ny;
@@ -555,9 +540,7 @@ function bounceBullet(b, nx, ny, keep) {
 	b.rc = (b.rc || 0) + 1;
 	b.dmg = (b.dmg || 2.5) * RICOCHET_DMG;
 }
-function sparkBurst(x, y, n) {
-	for (let i = 0; i < n; i++) dust.push({ x, y, vx: (Math.random() - 0.5) * 8, vy: -Math.random() * 5, r: 1.6, grow: 0, life: 10, max: 10, a: 0.9, c: '255,225,130' });
-}
+
 // пуля b вошла в твёрдый объект c (ox, oy — последняя свободная точка). true — срикошетила, false — остановлена
 function tryRicochet(b, c, ox, oy) {
 	if (c.type !== 'barrier' && c.type !== 'house') {          // мешки с песком и окоп глотают пулю
@@ -611,6 +594,9 @@ function bulletHitUnit(b, u, seg) {
 	const h = u.hero, hs = u.health.state;
 	const part = partOfSeg(seg);
 	const dmg = b.dmg || 2.5;
+	const by = b.by || (b.foe ? 'enemy' : 'squad');
+	const info = { src: b.rc ? 'ricochet' : b.sn ? 'sniper' : b.mg ? 'mg' : 'rifle', how: 'bullet', dist: Math.abs((b.sx == null ? b.x : b.sx) - h.p.pelvis.x) / 10, by };
+	if (by === 'player' && h.foe) stats.hits++;
 	const armored = (part === 'head' && hs.helmet > 0) || (part === 'torso' && hs.armor > 0);
 	if (seg.b === 'head' && hs.helmet > 0) {                   // касательное попадание в каску
 		const c = h.p.head;
@@ -620,7 +606,7 @@ function bulletHitUnit(b, u, seg) {
 			nx /= nl; ny /= nl;
 			const dot = (b.vx * nx + b.vy * ny) / (Math.hypot(b.vx, b.vy) || 1);
 			if (dot < 0 && -dot < Math.sin(RICOCHET_ANGLE)) {
-				u.health.onShrapnel(seg.b, dmg * HELMET_DMG);
+				u.health.onShrapnel(seg.b, dmg * HELMET_DMG, info);
 				addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
 				bounceBullet(b, nx, ny, 0.6);
 				(b.hit = b.hit || new Set()).add(h);
@@ -632,7 +618,7 @@ function bulletHitUnit(b, u, seg) {
 		}
 	}
 	for (const n of [seg.a, seg.b]) { h.p[n].px -= b.vx * 0.06; h.p[n].py -= b.vy * 0.06; }
-	u.health.onShrapnel(seg.b, dmg);                           // винтовочная пуля: ×2.5 от осколка
+	u.health.onShrapnel(seg.b, dmg, info);                           // винтовочная пуля: ×2.5 от осколка
 	addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
 	if (armored || (b.pen || 0) >= PEN_MAX) return 0;          // броня и каска пулю останавливают
 	b.pen = (b.pen || 0) + 1;                                  // мягкое тело: пуля летит дальше с ×0.6 урона
@@ -710,7 +696,7 @@ const ROCKET_DUD_CHANCE = 0.25;   // шанс, что ракета воткнё�
 const ROCKET_DUD_MIN = 60;        // задержка взрыва, кадров (1 с)
 const ROCKET_DUD_MAX = 180;       // (3 с)
 const DUD_SHARD_MUL = 1.25;       // осколков на 25% больше при таком взрыве
-const DIRT = ['#4a3b27', '#3a2f1f', '#5a4a30', '#2a301b'];
+
 const rockets = [];
 const ROCKET_SPREAD = 1300;
 const ROCKET_GAP = 450;
@@ -739,9 +725,7 @@ function pickRocketX(other) {
   if (lastHits.length > 4) lastHits.shift();
   return x;
 }
-const dust = [];
-const debris = [];
-const craters = [];
+
 // ===== Предупреждение об атаке с неба: мигает последнюю секунду перед ракетами / штурмовкой =====
 const WARN_FRAMES = 60;                       // 1 секунда
 const warn = { rocket: 0, strafe: 0, mega: 0 };        // сколько кадров ещё мигать
@@ -949,7 +933,7 @@ function updateRockets() {
       if (Math.random() < 0.35) dust.push({ x: r.x + (Math.random() - 0.5) * 6, y: r.y - 6, vx: (Math.random() - 0.5) * 0.6, vy: -(0.6 + Math.random() * 1.2), r: 3, grow: 0.2, life: 50, max: 50, a: 0.35, c: '120,120,120' });
       if (--r.stuck <= 0) {
         rockets.splice(i, 1);
-        explode(r.x, GROUND - 10, r.R || ROCKET_R, r.pw || ROCKET_POWER, DUD_SHARD_MUL);
+        explode(r.x, GROUND - 10, r.R || ROCKET_R, r.pw || ROCKET_POWER, DUD_SHARD_MUL, r.mega ? 'mega' : 'rocket', 'enemy');
       }
       continue;
     }
@@ -964,7 +948,7 @@ function updateRockets() {
     const roof = !r.mega && props.find(c => c.type === 'house' && r.x > c.x && r.x < c.x + c.w && r.y >= GROUND - c.h);
     if (roof) {                                              // крыша держит ракету: взрыв наверху, внутри почти не задевает
       rockets.splice(i, 1);
-      explode(r.x, GROUND - roof.h - 4, r.R || ROCKET_R, r.pw || ROCKET_POWER);
+      explode(r.x, GROUND - roof.h - 4, r.R || ROCKET_R, r.pw || ROCKET_POWER, 1, r.mega ? 'mega' : 'rocket', 'enemy');
       continue;
     }
     if (r.y >= GROUND - 4) {
@@ -975,7 +959,7 @@ function updateRockets() {
         continue;
       }
       rockets.splice(i, 1);
-      explode(r.x, GROUND - 10, r.R || ROCKET_R, r.pw || ROCKET_POWER);
+      explode(r.x, GROUND - 10, r.R || ROCKET_R, r.pw || ROCKET_POWER, 1, r.mega ? 'mega' : 'rocket', 'enemy');
       if (r.mega) megaBoom(r.x);
     }
   }
@@ -1046,7 +1030,7 @@ function updateStrafe() {
               h.p[n].px -= b.vx * 0.05;
               h.p[n].py -= b.vy * 0.05;
             }
-            u.health.onShrapnel(seg.b);
+            u.health.onShrapnel(seg.b, 1, { src: 'strafe', how: 'bullet', by: 'enemy' });
             addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
             dead = true;
             break;
@@ -1059,314 +1043,12 @@ function updateStrafe() {
     if (dead || b.y > H + 200) strafeShots.splice(i, 1);
   }
 }
-function spawnDust(x, power) {
-  for (let i = 0; i < 28 * power; i++) {
-    const low = Math.random() < 0.5;
-    const side = Math.random() < 0.5 ? -1 : 1;
-    const life = 120 + Math.random() * 120;
-    dust.push({
-      x: x + (Math.random() - 0.5) * 60 * power, y: GROUND - 6,
-      vx: low ? side * (3 + Math.random() * 9) : (Math.random() - 0.5) * 6,
-      vy: low ? -Math.random() * 1.2 : -(1 + Math.random() * 4.5),
-      r: 10 + Math.random() * 18, grow: 0.5 + Math.random() * 0.5,
-      life, max: life, a: 0.55,
-      c: Math.random() < 0.5 ? '118,100,72' : '84,72,52'
-    });
-  }
-  for (let i = 0; i < 45 * power; i++) {
-    const ang = -Math.PI / 2 + (Math.random() - 0.5) * 2.4;
-    const sp = (5 + Math.random() * 14) * Math.sqrt(power);
-    const life = 90 + Math.random() * 70;
-    debris.push({
-      x: x + (Math.random() - 0.5) * 30, y: GROUND - 8,
-      vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-      s: 2 + Math.random() * 5, life, max: life,
-      c: DIRT[(Math.random() * DIRT.length) | 0]
-    });
-  }
-}
-function updateDust() {
-  for (let i = dust.length - 1; i >= 0; i--) {
-    const d = dust[i];
-    d.x += d.vx; d.y += d.vy;
-    d.vx *= 0.97; d.vy *= 0.97;
-    d.r += d.grow;
-    if (--d.life <= 0) dust.splice(i, 1);
-  }
-  for (let i = debris.length - 1; i >= 0; i--) {
-    const d = debris[i];
-    d.vy += 0.5;
-    d.x += d.vx; d.y += d.vy;
-    d.vx *= 0.995;
-    if (d.y >= GROUND - d.s / 2) { d.y = GROUND - d.s / 2; d.vx = 0; d.vy = 0; } // упал и лежит
-    if (--d.life <= 0) debris.splice(i, 1);
-  }
-  shake *= 0.9;
-  if (shake < 0.1) shake = 0;
-}
-// ===== Раны: пулевые отверстия, кровотечение, капли и лужи =====
-const WOUND_PART = { head: 'head', neck: 'head', chest: 'torso', pelvis: 'torso', elbow: 'arms', wrist: 'arms', knee: 'legs', ankle: 'legs', toe: 'legs' };
-const MAX_WOUNDS = 40;                 // отметок на одного бойца
-const blood = [];                      // летящие капли
-const bloodPools = [];                 // лужи на земле
-const partOfSeg = seg => WOUND_PART[seg.b.replace(/[BF]$/, '')];
-
-// положение раны в мире (привязана к сегменту: t — вдоль кости, o — в стороне от оси)
-function woundPos(h, w) {
-  const seg = h.segs[w.si], A = h.p[seg.a], B = h.p[seg.b];
-  const dx = B.x - A.x, dy = B.y - A.y, l = Math.hypot(dx, dy) || 1;
-  const k = w.o * w.f * h.f * seg.ry;  // h.f / w.f — боец мог развернуться
-  return { x: A.x + dx * w.t - dy / l * k, y: A.y + dy * w.t + dx * 1 / l * k };
-}
-function pushWound(h, w) {
-  const seg = h.segs[w.si];
-  const big = w.kind === 'tear' ? 1.4 : w.kind === 'frag' ? 1.2 : w.kind === 'slash' ? 1.3 : w.kind === 'burn' ? 1.5 : w.kind === 'bruise' ? 1.3 : w.kind === 'graze' ? 0.6 : 1;
-  Object.assign(w, {
-    f: h.f, r: 1.6 * big, stain: 2.5 * big, maxStain: Math.min(seg.ry * 1.1, 4.5 + 3 * big),
-    drip: 0, maxDrip: seg.ry * 1.1, dx: (Math.random() - 0.5) * 1.2, wet: 1
-  });
-  h.wounds = h.wounds || [];
-  h.wounds.push(w);
-  if (h.wounds.length > MAX_WOUNDS) h.wounds.shift();
-}
-// попадание пули / осколка в сегмент seg бойца u в мировой точке (x, y)
-function addWound(u, seg, x, y, kind, vx, vy) {
-  const h = u.hero;
-  if (u.health.state.dead) return;
-  const si = h.segs.indexOf(seg);
-  if (si < 0) return;
-  if (u.health.state.blocked) {                      // каска / жилет выдержали: вмятина и искры вместо раны
-    const torso = u.health.state.blockedPart === 'torso';
-    const hs = torso ? si : h.segs.findIndex(s => s.b === 'head');
-    pushWound(h, { part: torso ? 'torso' : 'head', si: hs, t: torso ? 0.2 + Math.random() * 0.6 : 0.6 + Math.random() * 0.35, o: (Math.random() - 0.5) * 0.7, kind: 'dent' });
-    for (let i = 0; i < 6; i++) dust.push({ x, y, vx: (Math.random() - 0.5) * 7, vy: -Math.random() * 4, r: 1.6, grow: 0, life: 9, max: 9, a: 0.9, c: '255,225,130' });
-    hitReact(h, torso ? 'torso' : 'head', vx || 0, vy || 0, 0.45);
-    return;
-  }
-  const A = h.p[seg.a], B = h.p[seg.b];
-  const dx = B.x - A.x, dy = B.y - A.y, l = Math.hypot(dx, dy) || 1;
-  const t = Math.max(0.05, Math.min(0.95, ((x - A.x) * dx + (y - A.y) * dy) / (l * l)));
-  const nx = -dy / l, ny = dx / l;
-  const o = ((x - (A.x + dx * t)) * nx + (y - (A.y + dy * t)) * ny) / seg.ry * 0.6;
-  let k = kind;                                                           // разнообразие ран
-  if (kind === 'frag') { const r = Math.random(); k = r < 0.55 ? 'frag' : r < 0.85 ? 'slash' : 'burn'; }   // осколок: дыра, порез или ожог от горячего металла
-  else if (kind === 'bullet' && Math.abs(o) > 0.42) k = 'graze';          // по касательной — царапина
-  const wd = { part: partOfSeg(seg), si, t, o: Math.max(-0.85, Math.min(0.85, o)), kind: k };
-  if (kind === 'embed') {                                                 // крупный осколок застрял в теле
-    wd.ttl = EMBED_TTL;
-    wd.sz = 8 + Math.random() * 5;
-    wd.ra = Math.atan2(-(vy || 0), -(vx || 1)) - Math.atan2(dy, dx);      // торчит назад по траектории, угол относительно кости
-  }
-  pushWound(h, wd);
-  hitReact(h, partOfSeg(seg), vx || 0, vy || 0, k === 'graze' ? 0.4 : kind === 'frag' ? 0.7 : 1);
-  spawnBlood(x, y, k === 'burn' ? 0 : k === 'graze' ? 2 : kind === 'frag' ? 7 : 5, -(vx || 0) * 0.1, -2, 5);   // брызги
-}
-// рана без отметки (например, от взрыва) — рваная
-function addTear(h, part) {
-  const list = [];
-  h.segs.forEach((s, i) => { if (partOfSeg(s) === part) list.push(i); });
-  if (!list.length) return;
-  const r = Math.random();                                                // разнообразие ран от взрыва
-  const kind = r < 0.4 ? 'tear' : r < 0.65 ? 'burn' : r < 0.85 ? 'slash' : 'bruise';
-  pushWound(h, { part, si: list[(Math.random() * list.length) | 0], t: 0.2 + Math.random() * 0.6, o: (Math.random() - 0.5) * 1.1, kind });
-}
-// ===== Расчленёнка: у погибших от взрыва отлетают конечности =====
-const DISMEMBER_K = 0.3;   // с какой силы удара по конечности её может оторвать
-// рвёт связь an–bn (an — со стороны туловища): bn и всё, что за ней, отлетает отдельным куском
-function severAt(h, an, bn, bx, k, power) {
-  const P = h.p, A = P[an], B = P[bn];
-  const si = h.segs.findIndex(s => s.a === an && s.b === bn);
-  const st = h.sticks.findIndex(s => (s.a === A && s.b === B) || (s.a === B && s.b === A));
-  if (si < 0 || st < 0) return;
-  const seg = h.segs[si], len = h.sticks[st].len;
-  h.sticks.splice(st, 1);
-  const vn = 'cut' + (h.cutN = (h.cutN || 0) + 1);                 // у отлетающей части свой край вместо общего сустава
-  const V = { x: A.x, y: A.y, px: A.px, py: A.py, fx: A.x, plant: false, r: 3, m: 0.8 };
-  P[vn] = V;
-  seg.a = vn;
-  h.sticks.push({ a: V, b: B, len });
-  const grp = new Set([V, B]);                                      // всё, что держится за отлетающим краем
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const s of h.sticks) {
-      if (grp.has(s.a) !== grp.has(s.b)) { grp.add(s.a); grp.add(s.b); grew = true; }
-    }
-  }
-  h.ranges = h.ranges.filter(r => grp.has(r.a) === grp.has(r.b));   // ограничители между телом и куском больше не нужны
-  const dir = Math.sign(B.x - bx) || (Math.random() < 0.5 ? -1 : 1);
-  const vx = dir * (4 + Math.random() * 6) * (0.6 + 0.6 * k) * Math.sqrt(power);
-  const vy = -(3 + Math.random() * 7) * Math.sqrt(power);
-  for (const q of grp) { q.px -= vx + (Math.random() - 0.5) * 2; q.py -= vy + (Math.random() - 0.5) * 2; }   // кусок летит и кувыркается
-  (h.stumps = h.stumps || []).push({ n: an, r: seg.ry * 0.9, t: 150 }, { n: vn, r: seg.ry * 0.9, t: 150, trail: true });
-  spawnBlood(A.x, A.y, 14, dir * 2, -3, 6);
-  spawnBlood(V.x, V.y, 10, dir * 4, -4, 6);
-  for (let i = 0; i < 6; i++) {                                     // ошмётки
-    debris.push({ x: A.x, y: A.y, vx: (Math.random() - 0.5) * 8 + dir * 2, vy: -Math.random() * 6,
-      s: 2 + Math.random() * 3, life: 300, max: 300, c: Math.random() < 0.5 ? '#7a1010' : '#a02020' });
-  }
-}
-function dismember(h, hits, bx, power, wasDead) {
-  const cuts = h.cuts = h.cuts || {};
-  const hit = (...names) => Math.max(0, ...names.map(n => hits[n] || 0));
-  const mul = (wasDead ? 0.5 : 1) * (0.7 + 0.3 * Math.sqrt(power));   // труп, которого добивают, рвёт реже
-  const roll = k => Math.random() < Math.min(0.95, Math.max(0, k - DISMEMBER_K) * 1.8 * mul);
-  for (const s of ['B', 'F']) {
-    const ka = hit('elbow' + s, 'wrist' + s);
-    if (!cuts['arm' + s] && roll(ka)) {
-      cuts['arm' + s] = true;
-      if (ka > 0.65 && Math.random() < 0.6) severAt(h, 'chest', 'elbow' + s, bx, ka, power);        // рука целиком
-      else severAt(h, 'elbow' + s, 'wrist' + s, bx, ka, power);                                      // предплечье с кистью
-    }
-    const kl = hit('knee' + s, 'ankle' + s, 'toe' + s);
-    if (!cuts['leg' + s] && roll(kl)) {
-      cuts['leg' + s] = true;
-      if (kl > 0.75 && Math.random() < 0.5) severAt(h, 'pelvis', 'knee' + s, bx, kl, power);         // нога целиком
-      else if (kl > 0.5 && Math.random() < 0.6) severAt(h, 'knee' + s, 'ankle' + s, bx, kl, power);  // голень со стопой
-      else severAt(h, 'ankle' + s, 'toe' + s, bx, kl, power);                                        // стопа
-    }
-  }
-  const kh = hit('head', 'neck');
-  if (!cuts.head && kh > 0.8 && Math.random() < 0.35 * mul) {
-    cuts.head = true;
-    severAt(h, 'chest', 'neck', bx, kh, power);                                                      // голову сорвало
-  }
-}
-// ===== Слетевшие каски =====
-const helmets = [];
-function spawnHelmet(h) {
-  const p = h.p.head;
-  helmets.push({
-    x: p.x, y: p.y - 6,
-    vx: -h.f * (1 + Math.random() * 3) + (Math.random() - 0.5) * 2,
-    vy: -4 - Math.random() * 3,
-    a: 0, va: (Math.random() - 0.5) * 0.6,
-    col: h.helmetC || COLORS.helmet
-  });
-  if (helmets.length > 40) helmets.shift();
-}
-function updateHelmets() {
-  for (const m of helmets) {
-    if (m.rest) continue;
-    m.vy += GRAVITY;
-    m.x += m.vx; m.y += m.vy; m.a += m.va;
-    if (m.y >= GROUND - 5) {
-      m.y = GROUND - 5;
-      if (Math.abs(m.vy) > 2) {                       // отскок
-        m.vy = -m.vy * 0.35; m.vx *= 0.7; m.va *= 0.7;
-      } else {                                         // катится и успокаивается
-        m.vy = 0; m.vx *= 0.8; m.va *= 0.8;
-        m.a += (Math.round(m.a / Math.PI) * Math.PI - m.a) * 0.15;
-        if (Math.abs(m.vx) < 0.1 && Math.abs(m.va) < 0.02) m.rest = true;
-      }
-    }
-  }
-}
-function spawnBlood(x, y, n, vx, vy, spread) {
-  for (let i = 0; i < n; i++) {
-    if (blood.length > 400) blood.shift();
-    blood.push({
-      x, y,
-      vx: vx + (Math.random() - 0.5) * spread,
-      vy: vy + (Math.random() - 0.5) * spread,
-      r: 1 + Math.random() * 1.2, life: 90
-    });
-  }
-}
-function landBlood(x, r) {
-  for (const p of bloodPools) {
-    if (Math.abs(p.x - x) < p.r + 8) {
-      p.maxR = Math.min(34, p.maxR + r * 0.5);
-      p.grow = Math.max(p.grow, 0.04);
-      return;
-    }
-  }
-  bloodPools.push({ x, r, maxR: 4 + r * 2, grow: 0.04 });
-  if (bloodPools.length > 60) bloodPools.shift();
-}
-// вызывается для каждого бойца внутри stepHero (hero и Health — текущего бойца)
-function updateWounds() {
-  const h = hero, st = Health.state;
-  const ws = h.wounds || (h.wounds = []);
-  if (h.stumps) for (const s of h.stumps) {                  // из культей хлещет кровь, потом капает
-    if (s.t <= 0) continue;
-    s.t--;
-    const q = h.p[s.n];
-    if (Math.random() < (s.trail ? 0.6 : 0.35) * Math.min(1, s.t / 60)) spawnBlood(q.x, q.y, 1, (q.x - q.px) * 0.3, (q.y - q.py) * 0.3 - 1, 2.5);
-  }
-  if (st.helmet <= 0 && !h.helmetOff) { h.helmetOff = true; spawnHelmet(h); }   // каска разрушена — слетает
-  if (st.armor <= 0 && !h.armorOff) {                                           // бронежилет разрушен — обломки пластин
-    h.armorOff = true;
-    const c = h.p.chest;
-    for (let i = 0; i < 8; i++) {
-      debris.push({
-        x: c.x + (Math.random() - 0.5) * 14, y: c.y + (Math.random() - 0.5) * 14,
-        vx: (Math.random() - 0.5) * 6, vy: -Math.random() * 4,
-        s: 4 + Math.random() * 3, life: 400, max: 400, c: i % 2 ? '#3f4a35' : '#2c3524'
-      });
-    }
-  }
-  if (st.dead && !h.deathPool) {                           // под погибшим растёт лужа
-    h.deathPool = true;
-    if (ws.length) bloodPools.push({ x: h.p.pelvis.x, r: 5, maxR: 22 + Math.min(18, ws.length * 3), grow: 0.1 });
-    if (bloodPools.length > 60) bloodPools.shift();
-  }
-  const bleeding = !st.dead && st.bleed > 0.03;
-  const cnt = { head: 0, torso: 0, arms: 0, legs: 0 };
-  for (let i = ws.length - 1; i >= 0; i--) {
-    const w = ws[i];
-    if (w.kind === 'dent') { if ((w.part === 'torso' ? st.armor : st.helmet) <= 0) ws.splice(i, 1); continue; }   // вмятины живут, пока есть каска / жилет
-    if (w.kind === 'embed') {                              // осколок торчит 55 с, перевязка его не убирает
-      if (--w.ttl <= 0) { ws.splice(i, 1); continue; }
-      if (bleeding && st.wound[w.part]) w.stain = Math.min(w.maxStain, w.stain + 0.006 * st.bleed);
-      continue;
-    }
-    if (!st.wound[w.part]) {                               // перевязано — рана уходит под бинт на том же месте
-      if (h.wrap[w.part] > 0) {
-        const dr = h.dress || (h.dress = {});
-        (dr[w.part] || (dr[w.part] = [])).push({ si: w.si, t: w.t, o: w.o * w.f, kind: w.kind });
-      }
-      ws.splice(i, 1); continue;
-    }
-    cnt[w.part]++;
-    if (w.kind === 'burn' || w.kind === 'bruise') continue;  // ожоги и гематомы не кровоточат
-    w.wet = bleeding ? Math.min(1, w.wet + 0.05) : Math.max(0, w.wet - 0.0015);   // кровь подсыхает
-    if (!bleeding) continue;
-    w.stain = Math.min(w.maxStain, w.stain + 0.006 * st.bleed);
-    w.drip = Math.min(w.maxDrip, w.drip + 0.02 * st.bleed);
-    if (Math.random() < Math.min(0.3, st.bleed * 0.12 / ws.length)) {
-      const p = woundPos(h, w);
-      spawnBlood(p.x, p.y, 1, 0, 0, 0.8);                  // капля
-    }
-  }
-  if (h.dress) for (const part in h.dress) {               // бинт снят / сброшен — следов не остаётся
-    if (!(h.wrap[part] > 0)) delete h.dress[part];
-  }
-  for (const part in cnt) {                                // открытая рана без отметок (взрыв и т.п.)
-    if (!st.wound[part]) continue;
-    const dr = h.dress && h.dress[part];
-    if (dr && dr.length) {                                 // бинт промок — кровь проступает на тех же местах
-      for (const d of dr) { pushWound(h, { part, si: d.si, t: d.t, o: d.o * h.f, kind: d.kind }); cnt[part]++; }
-      delete h.dress[part];
-    }
-    const need = Math.min(6, 1 + Math.floor((100 - st.parts[part]) / 30));
-    while (cnt[part] < need) { addTear(h, part); cnt[part]++; }
-  }
-}
-function updateBlood() {
-  for (let i = blood.length - 1; i >= 0; i--) {
-    const d = blood[i];
-    d.vy += 0.35;
-    d.x += d.vx; d.y += d.vy;
-    d.vx *= 0.99;
-    if (d.y >= GROUND - 1) { landBlood(d.x, d.r); blood.splice(i, 1); }
-    else if (--d.life <= 0) blood.splice(i, 1);
-  }
-  for (const p of bloodPools) if (p.r < p.maxR) p.r = Math.min(p.maxR, p.r + p.grow);
-}
 const WORLD_W = 20000;
 const START_X = 220;
 const FINISH_X = WORLD_W - 260;
 const props = [];
+const SANDBAG_H = 100;                     // высота мешков с песком (боец ~190, в приседе голова ~150)
+const BARRIER_H = 115;                     // высота бетонного барьера
 let camX = 0;
 let won = false;
 let worldSeed = 1;
@@ -1381,8 +1063,8 @@ function genWorld() {
   while (x < FINISH_X - 450) {
     const r = rnd();
     let p;
-    if (r < 0.26) p = { type: 'sandbags', w: 100 + rnd() * 70, h: 44 };
-    else if (r < 0.46) p = { type: 'barrier', w: 58, h: 72 };
+    if (r < 0.26) p = { type: 'sandbags', w: 150 + rnd() * 70, h: SANDBAG_H };
+    else if (r < 0.46) p = { type: 'barrier', w: 76, h: BARRIER_H };
     else if (r < 0.598) p = { type: 'medkit', w: 64, h: 44, left: 30, deco: true };   // 12% → 13,8% (+15%)
     else if (r < 0.678) p = { type: 'armor', w: 86, h: 56, left: 5, deco: true };     // станция брони: 5 комплектов
     else if (r < 0.86) p = { type: 'trench', w: 360 + rnd() * 220, h: 58 };
@@ -1397,8 +1079,9 @@ function genWorld() {
   const houses = props.filter(p => p.type === 'house');                                  // хотя бы в одном доме — пулемётчик
   if (houses.length && !houses.some(p => p.mg)) houses[Math.floor(Math.random() * houses.length)].mg = true;
 }
+const CAM_LOOK = 0.5;                       // насколько камера уезжает к курсору (0 — выключено, 1 — сильно)
 function updateCamera() {
-  const target = hero.p.pelvis.x - W * 0.4;
+  const target = hero.p.pelvis.x - W * 0.45 + CAM_LOOK * (mouse.sx - W * 0.5);
   const max = Math.max(0, WORLD_W - W);
   camX += (Math.max(0, Math.min(max, target)) - camX) * 0.08;
   mouse.x = mouse.sx + camX;
@@ -1445,1059 +1128,8 @@ function coverFactor(px, py, bx, by) {
   }
   return 1;
 }
-const squad = [];
-const LIE_MIN = 780, LIE_MAX = 1020;
-const LIE_FOR = 150;
-const ALLY_SHIRTS = [['#6b5d3b', '#54482c'], ['#4f6a5a', '#3d5446'], ['#6a4f3b', '#523c2c'], ['#5a5f6f', '#464a58']];
-const everyone = () => [{ hero, health: playerHealth }, ...squad];
-function runAs(a, fn) {
-  const sv = { hero, Health, stun, keys, standing };
-  hero = a.hero; Health = a.health; stun = a.stun; keys = a.keys; standing = true;
-  try {
-    fn();
-  } finally {
-    a.stun = stun;
-    hero = sv.hero; Health = sv.Health; stun = sv.stun; keys = sv.keys; standing = sv.standing;
-  }
-}
-function runAll(fn) {
-  fn();
-  for (const a of squad) runAs(a, fn);
-  for (const a of foes) runAs(a, fn);
-}
-function tintUnit(h, i) {
-  const [light, dark] = ALLY_SHIRTS[i % ALLY_SHIRTS.length];
-  for (const s of h.segs) {
-    if (s.c === COLORS.shirt) s.c = light;
-    else if (s.c === COLORS.shirtDark) s.c = dark;
-  }
-}
-// ===== Позывные и радиосообщения о гибели =====
-const CALLSIGNS = ['Альфа', 'Браво', 'Чарли', 'Дельта', 'Эхо', 'Фокстрот', 'Гольф', 'Отель', 'Леший', 'Гризли', 'Тень', 'Север', 'Рысь', 'Гром', 'Бес', 'Шмель', 'Кедр', 'Байкал'];
-const CALLSIGNS_SNIPER = ['Ворон', 'Сокол', 'Гриф', 'Кречет', 'Глаз'];
-const CALLSIGNS_MEDIC = ['Айболит', 'Пилюля', 'Склиф', 'Бинт', 'Таблетка'];
-const callouts = [];       // радиосообщения над головой игрока
-const CALL_TYPE = 3;       // кадров на одну напечатанную букву
-const CALL_LIFE = 260;     // сколько кадров живёт сообщение
-const CALL_GAP = 25;       // пауза между сообщениями, если погибли сразу несколько
-function assignCallsigns() {                                 // уникальный позывной каждому, по роли
-	const gen = CALLSIGNS.slice(), sn = CALLSIGNS_SNIPER.slice(), md = CALLSIGNS_MEDIC.slice();
-	for (const a of squad) {
-		let pool = (a.personal || a.isMedic) ? md : a.sniper ? sn : gen;
-		if (!pool.length) pool = gen;
-		a.call = a.hero.call = pool.splice((Math.random() * pool.length) | 0, 1)[0];
-	}
-}
-function radioSound() {                                      // шипение рации и «пик» конца передачи
-	try {
-		const a = sndCtx(), now = a.currentTime;
-		const n = Math.floor(a.sampleRate * 0.14);
-		const buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
-		for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (i < n * 0.15 ? 1 : Math.pow(1 - i / n, 2));
-		const src = a.createBufferSource(); src.buffer = buf;
-		const bp = a.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.8;
-		const g = a.createGain(); g.gain.value = 0.18;
-		src.connect(bp); bp.connect(g); g.connect(Snd.out); src.start(now);
-		const o = a.createOscillator(), og = a.createGain();
-		o.type = 'square'; o.frequency.setValueAtTime(1000, now + 0.12);
-		og.gain.setValueAtTime(0.0001, now + 0.12);
-		og.gain.exponentialRampToValueAtTime(0.05, now + 0.13);
-		og.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
-		o.connect(og); og.connect(Snd.out); o.start(now + 0.12); o.stop(now + 0.25);
-	} catch (e) { /* звук необязателен */ }
-}
-function updateCallouts() {
-	let n = 0;
-	for (const a of squad) {                                 // боец погиб — ставим сообщение в очередь
-		if (a.announced || !a.health.state.dead) continue;
-		a.announced = true;
-		const name = a.call.toUpperCase();
-		callouts.push({ name, txt: name + ' — 200', t: -1 - n++ * CALL_GAP });
-		if (callouts.length > 4) callouts.shift();
-	}
-	for (let i = callouts.length - 1; i >= 0; i--) {
-		const c = callouts[i];
-		if (++c.t === 0) radioSound();                       // передача началась
-		if (c.t > CALL_LIFE) callouts.splice(i, 1);
-	}
-}
-function genSquad() {
-  squad.length = 0;
-  const n = 4 + Math.floor(Math.random() * 5);
-  for (let i = 0; i < n; i++) {
-    const x = START_X + (i % 2 ? -1 : 1) * (55 + 40 * Math.floor(i / 2));
-    const h = createHero(x);
-    h.phase = Math.random() * Math.PI * 2;
-    tintUnit(h, i);
-    h.sniper = Math.random() < 0.3;
-    if (h.sniper) h.ammo = SNIPER_MAG;
-    squad.push({
-      hero: h, health: makeHealth(false), keys: {}, stun: 0,
-      lieT: LIE_MIN + Math.random() * (LIE_MAX - LIE_MIN), lieFor: 0, medic: null,
-      stopX: FINISH_X - 30 - i * 35, sniper: h.sniper
-    });
-  }
-  if (!squad.some(a => a.sniper)) {
-    const s = squad[Math.floor(Math.random() * squad.length)];
-    s.sniper = s.hero.sniper = true;
-    s.hero.ammo = SNIPER_MAG;
-  }
-  const mm = squad.filter(a => !a.sniper);                  // медик — не снайпер; шанс 25%, но минимум один
-  mm.forEach(a => { a.isMedic = a.hero.isMedic = Math.random() < 0.25; });
-  if (mm.length && !mm.some(a => a.isMedic)) {
-    const m = mm[Math.floor(Math.random() * mm.length)];
-    m.isMedic = m.hero.isMedic = true;
-  }
-  // личный медик игрока: появляется дополнительно к отряду и держится рядом с игроком
-  const ph = createHero(START_X - 25);
-  ph.phase = Math.random() * Math.PI * 2;
-  tintUnit(ph, squad.length);
-  ph.isMedic = 'personal';
-  squad.push({
-    hero: ph, health: makeHealth(false), keys: {}, stun: 0,
-    lieT: 1e9, lieFor: 0, medic: null,          // не ложится «отдыхать» сам
-    stopX: FINISH_X, isMedic: 'personal', personal: true
-  });
-  assignCallsigns();
-}
-function withUnit(u, fn) {
-  const sh = hero, sH = Health;
-  hero = u.hero; Health = u.health;
-  try { return fn(); } finally { hero = sh; Health = sH; }
-}
-function needsHelp(u, byMedic) {
-  const st = u.health.state;
-  if (st.dead) return false;
-  const wounded = st.wound.head || st.wound.torso || st.wound.arms || st.wound.legs;
-  const isPlayer = u.hero === hero;
-  if (byMedic && st.concussion > CONCUSS_HELP) return !isPlayer || byMedic === 'personal' || hero.walk < 0.3;   // медик выводит из контузии
-  if (!wounded) return false;
-  if (byMedic) return !isPlayer || byMedic === 'personal' || hero.walk < 0.3;   // медик лечит и тех, кто на ногах (игрока — когда он стоит на месте)
-  return st.ko > 0 || st.broken || (isPlayer ? stun : u.stun) > 0 || (isPlayer && hero.lie > 0.6);
-}
-function nearestMedkit(x) {
-  let best = null;
-  for (const c of props) {
-    if (c.type !== 'medkit' || c.left <= 0) continue;
-    const d = Math.abs(c.x + c.w / 2 - x);
-    if (d < 700 && (!best || d < best.d)) best = { c, d };
-  }
-  return best && best.c;
-}
-const TURN_DELAY = 15;   // кадров, которые боец должен «хотеть» новое направление, прежде чем сменить его
-function steadyDir(a, want) {
-  if (a.dir === undefined) { a.dir = 0; a.dirT = 0; }
-  if (want === a.dir) { a.dirT = 0; return want; }
-  if (++a.dirT >= TURN_DELAY) { a.dir = want; a.dirT = 0; return want; }
-  return 0;
-}
-function aiThink(a) {
-  const k = a.keys, st = a.health.state, x = a.hero.p.pelvis.x;
-  k.KeyA = k.KeyD = k.KeyR = k.KeyS = k.ShiftLeft = false;
-  a.hero.treat = null;
-  combatThink(a);
-  if (st.dead || st.ko > 0 || a.stun > 0) dropCarry(a);
-  if (st.dead) return;
-  if (a.lieFor > 0) a.lieFor--;
-  else if (!a.personal) {                                         // ложимся только по предупреждению об ударе
-    const w = warn.mega > 0 ? 2 : (warn.rocket > 0 || warn.strafe > 0) ? 1 : 0;
-    if (!w) a.lieDelay = null;                                    // предупреждение закончилось — сброс
-    else {
-      if (a.lieDelay == null) a.lieDelay = Math.random() * 35;    // у каждого своя задержка реакции
-      if (--a.lieDelay <= 0) {
-        a.lieFor = LIE_FOR + (w === 2 ? 120 : 0);                 // мегаракета — лежим дольше
-        a.lieDelay = 1e9;                                         // не ложиться повторно до конца этого предупреждения
-      }
-    }
-  }
-  if (a.lieFor > 0) { k.ShiftLeft = true; return; }
-  if (a.stun > 0 || st.ko > 0) { a.medic = null; return; }
-  const danger = !!a.tgt && Math.abs(a.tgt.hero.p.pelvis.x - x) < (a.sniper ? SNIPER_RANGE : FIRE_RANGE);   // враг в зоне огня — не перевязываемся
-  if (a.hero.cot) {                                              // лежит на койке: встаёт при опасности или когда здоров
-    if (danger || isHealed(st)) releaseCot(a.hero);
-    else { k.KeyR = true; return; }
-  }
-  if (a.carry) {                                                  // несёт раненого к медику
-    const med = nearestMedic(x, a);
-    if (!med || !isDown(a.carry)) dropCarry(a, 300);
-    else if (Math.abs(med.hero.p.pelvis.x - x) < 120) dropCarry(a, 900);   // донёс — этого не поднимать 15 с
-    else if (danger) dropCarry(a, 300);
-    else { if (med.hero.p.pelvis.x > x) k.KeyD = true; else k.KeyA = true; return; }
-  } else if (!a.isMedic && !a.sniper && !danger && st.blood > 40 && !a.hero.cot && !(a.carryCD > 0)) {
-    let best = null;
-    for (const u of everyone()) {                                 // ищем потерявшего сознание, которого стоит вынести
-      if (u.hero === a.hero || !isDown(u) || u.hero.carriedBy || u.hero.noCarryT > 0) continue;
-      const cx = u.hero.p.pelvis.x, d = Math.abs(cx - x);
-      if (d >= 350 || (best && d >= best.d)) continue;
-      const med = nearestMedic(cx, a);
-      if (!med || med.medic === u.hero || Math.abs(med.hero.p.pelvis.x - cx) < 250) continue;   // медика нет, он уже рядом или уже идёт к раненому
-      best = { u, d };
-    }
-    if (best) {
-      if (best.d > 40) { if (best.u.hero.p.pelvis.x > x) k.KeyD = true; else k.KeyA = true; return; }
-      a.carry = best.u; best.u.hero.carriedBy = a.hero; a.hero.carrying = true;
-      return;
-    }
-  }
-  let patient = a.medic ? everyone().find(u => u.hero === a.medic) : null;
-  if (patient && (danger || patient.hero === a.hero || !needsHelp(patient, a.isMedic) || Math.abs(patient.hero.p.pelvis.x - x) > (a.isMedic ? 1100 : 600))) {
-    patient = a.medic = null;
-  }
-  if (a.personal && !danger) {                                    // личный медик: игрок — в первую очередь, всегда
-    const pl = everyone()[0];
-    if (needsHelp(pl, a.isMedic)) { patient = pl; a.medic = pl.hero; }
-  }
-  if (!patient && !danger && st.blood > 40) {
-    let best = null;
-    for (const u of everyone()) {
-      if (u.hero === a.hero || !needsHelp(u, a.isMedic)) continue;
-      if (a.personal && Math.abs(u.hero.p.pelvis.x - hero.p.pelvis.x) > 500) continue;   // от игрока далеко не уходит
-      if (squad.some(b => b !== a && b.medic === u.hero)) continue;
-      const d = Math.abs(u.hero.p.pelvis.x - x);
-      if (d < (a.isMedic ? 900 : 450) && (!best || d < best.d)) best = { u, d };
-    }
-    if (best) { patient = best.u; a.medic = patient.hero; }
-  }
-  if (patient) {
-    const part = withUnit(patient, () => pickWound(false));
-    const conc = !!a.isMedic && patient.health.state.concussion > CONCUSS_HELP;
-    if (part || conc) {
-      const px = part ? withUnit(patient, () => woundPoint(part)).x : patient.hero.p.pelvis.x;
-      const dx = px - x;
-      if (Math.abs(dx) > 40) {
-        if (dx > 0) k.KeyD = true; else k.KeyA = true;
-      } else {
-        a.hero.treat = patient;
-        patient.hero.beingTreated = 3;                  // пациент останавливается, пока медик рядом
-        const pvx = (a.personal && patient.hero === hero) ? hero.p.pelvis.x - hero.p.pelvis.px : 0;
-        if (Math.abs(pvx) > 0.3) { if (pvx > 0) k.KeyD = true; else k.KeyA = true; }   // игрок идёт — медик идёт рядом и лечит
-        else k.KeyS = true;
-      }
-      return;
-    }
-    a.medic = null;
-  }
-  const w = st.wound;
-  const anyWound = w.head || w.torso || w.arms || w.legs;
-  let dir = formationDir(a, x);
-  if (a.hero.beingTreated > 0) { a.hero.beingTreated--; dir = 0; }   // его бинтует медик — стоим
-  if (w.legs && !w.head && !w.torso && !w.arms) dir = 0;
-  if (a.tgt) {                                   // враг рядом или позади — остановиться, развернуться, стрелять
-    const dx = a.tgt.hero.p.pelvis.x - x;
-    if (Math.abs(dx) < a.holdD || dx * dir <= 0) dir = 0;
-    if (a.coverX != null) {                      // идём в укрытие и пригибаемся за ним
-      const cx = a.coverX - x;
-      dir = Math.abs(cx) > 14 ? Math.sign(cx) : 0;
-      if (dir === 0) k.KeyS = true;
-    } else if (dir === 0 && a.cover) k.KeyS = true;
-  }
-  if (a.sniper && a.tgt) { dir = 0; k.KeyS = true; }   // снайпер: встал на месте, присел, стреляет
-  if (a.personal) { dir = followPlayer(a, x); k.KeyS = false; }   // личный медик не уходит в укрытие и не отстаёт
-  if (!danger && !a.tgt && !a.personal && a.health.needsArmor()) {   // броня изношена — к ближайшей станции (до 600 px), подбор срабатывает сам
-    const c = nearestArmor(x, 600);
-    if (c) { const dx = c.x + c.w / 2 - x; dir = Math.abs(dx) > 20 ? Math.sign(dx) : 0; }
-  }
-  if (st.blood < 60 && !danger) {
-    const c = nearestMedkit(x);
-    if (c) {
-      const dx = c.x + c.w / 2 - x;
-      dir = Math.abs(dx) > 24 ? Math.sign(dx) : 0;
-      k.KeyR = true;
-    }
-  }
-  if (!danger && !a.personal && !a.hero.cot && (anyWound || st.blood < 70)) {    // раненый идёт к свободной койке (до 600 px)
-    const cot = nearestCot(x, a.hero);
-    if (cot) {
-      const dx = cotX(cot) - x;
-      dir = Math.abs(dx) > 24 ? Math.sign(dx) : 0;
-      if (dir === 0) k.KeyR = true;
-    }
-  }
-  if (anyWound && !danger) k.KeyR = true;
-  dir = steadyDir(a, dir);
-  if (dir > 0) k.KeyD = true; else if (dir < 0) k.KeyA = true;
-}
-// ===== Построение отряда: здоровые с каской впереди, раненые в хвосте =====
-const FORM_GAP = 55;                      // интервал между бойцами в колонне, px
-const FORM_MIN = 900, FORM_MAX = 1800;    // перестроение раз в 15–30 с (кадров)
-const FORM_HOLD_MAX = 1500;               // сколько максимум ждать, пока залечатся (25 с)
-const formation = { mode: 'march', n: -1, hurtN: 0, reformT: FORM_MIN, t: 0, holdX: 0, leadX: 0 };
-
-function isHurt(a) {
-  const st = a.health.state, w = st.wound;
-  return !!(w.head || w.torso || w.arms || w.legs) || st.ko > 0 || st.blood < 45;
-}
-function squadScore(a) {
-  const st = a.health.state, w = st.wound;
-  const parts = (st.parts.head + st.parts.torso + st.parts.arms + st.parts.legs) / 4;
-  const wounds = (w.head ? 1 : 0) + (w.torso ? 1 : 0) + (w.arms ? 1 : 0) + (w.legs ? 1 : 0);
-  return st.blood * 0.3 + parts * 0.3 + (st.helmet > 0 ? 25 : 0) + (st.armor > 0 ? 20 : 0) - wounds * 25 - (st.ko > 0 ? 50 : 0);
-}
-function reformSquad(live) {
-  const F = formation;
-  live.sort((p, q) => squadScore(q) - squadScore(p));      // лучшие — вперёд
-  live.forEach((a, i) => { a.rank = i; });
-  F.reformT = FORM_MIN + Math.random() * (FORM_MAX - FORM_MIN);
-  if (live.some(isHurt)) {                                  // есть раненые — встаём и ждём, пока залечатся
-    F.mode = 'hold';
-    F.t = FORM_HOLD_MAX;
-    F.holdX = Math.max(...live.map(a => a.hero.p.pelvis.x));
-  }
-}
-function updateFormation() {
-  const F = formation;
-  const live = squad.filter(a => !a.health.state.dead && !a.personal);
-  if (!live.length) return;
-  if (live.length !== F.n) { F.n = live.length; reformSquad(live); }          // потери — перестроиться
-  const hurtN = live.filter(isHurt).length;
-  if (hurtN > F.hurtN) F.reformT = Math.min(F.reformT, 240);                  // кого-то ранило — скоро перестроимся
-  F.hurtN = hurtN;
-  if (F.mode === 'hold') {
-    if (--F.t <= 0 || hurtN === 0) F.mode = 'march';                          // все залечились (или ждали слишком долго)
-  } else if (--F.reformT <= 0) {
-    reformSquad(live);
-  }
-  const lead = live.find(a => a.rank === 0);
-  F.leadX = lead ? lead.hero.p.pelvis.x : 0;
-  const snp = live.find(a => a.sniper && a.tgt && a.health.state.ko === 0 && a.stun <= 0);   // снайпер работает
-  F.snipeA = snp || null;
-  F.snipeX = snp ? snp.hero.p.pelvis.x : null;
-}
-// куда идти бойцу по построению: -1 / 0 / 1
-function formationDir(a, x) {
-  const F = formation;
-  if (a.rank === undefined) return x < a.stopX ? 1 : 0;
-  if (F.snipeX != null && a !== F.snipeA) {                // снайпер стреляет — все стягиваются к нему и ждут
-    const slot = 50 + 35 * Math.floor(a.rank / 2);
-    const tx = F.snipeX + (a.rank % 2 ? -1 : 1) * slot;
-    const dd = tx - x;
-    a.hero.speedK = 1 + Math.min(0.3, Math.max(0, Math.abs(dd) - 40) / 400);
-    return Math.abs(dd) > 16 ? Math.sign(dd) : 0;
-  }
-  let target, dir;
-  if (F.mode === 'hold') {
-    target = F.holdX - a.rank * FORM_GAP;                 // своё место: здоровые вперёд, раненые назад
-    const d = target - x;
-    dir = Math.abs(d) > 16 ? Math.sign(d) : 0;
-  } else if (a.rank === 0) {
-    target = x;
-    dir = x < a.stopX ? 1 : 0;                            // голова колонны идёт к финишу
-  } else {
-    target = F.leadX - a.rank * FORM_GAP;                 // остальные держатся за ней
-    dir = x < target - 14 && x < a.stopX ? 1 : 0;
-  }
-  const lag = Math.abs(target - x);
-  a.hero.speedK = 1 + Math.min(0.3, Math.max(0, lag - 40) / 400);   // отстающие ускоряются
-  return dir;
-}
-
-// ===== Враги и бой =====
-const foes = [];
-const SIGHT = 1100;                    // дальность, на которой боец замечает противника
-const FIRE_RANGE = 850;                // дальность стрельбы
-const SNIPER_RANGE = FIRE_RANGE * 3;   // дальность снайпера (и его зрение)
-const SNIPER_SPEED = 60;               // скорость снайперской пули, px/кадр
-const SNIPER_CD = 90;                  // перезарядка между выстрелами, кадров
-const SNIPER_DMG = 12;                 // множитель урона (как у осколка; 12 — убивает попаданием в голову даже через каску)
-const FOE_WAVE_MIN = 3600, FOE_WAVE_MAX = 6000;   // кадров между волнами (60 кадров = 1 с)
-const FOE_MAX = 14;                    // живых врагов одновременно
-const FOE_GROUPS_MIN = 5, FOE_GROUPS_MAX = 7;   // сколько групп врагов на карте
-const FOE_GROUP_MIN_DIST = 600;        // ближайшая к базе группа стоит в 600 px от неё
-const FOE_GROUP_CLEAR = 2500;          // самая дальняя группа — не ближе 2500 px от старта игрока
-const FOE_COLORS = [['#59606b', '#454b55'], ['#5d5a4a', '#47453a'], ['#665048', '#4f3d36']];
-let foeTimer = 240;
-const everybody = () => [...everyone(), ...foes];   // все, кого можно ранить
-
-function tintFoe(h, i) {
-  const [light, dark] = FOE_COLORS[i % FOE_COLORS.length];
-  const map = { [COLORS.shirt]: light, [COLORS.shirtDark]: dark, [COLORS.pants]: '#3f444c', [COLORS.pantsDark]: '#30343a' };
-  for (const s of h.segs) if (map[s.c]) s.c = map[s.c];
-  h.helmetC = '#3a3f47';
-}
-// ===== Пулемётчик в доме: сидит у окна, 14 с непрерывно стреляет «в белый свет», 4 с отдыхает =====
-const MG_CHANCE = 0.75;          // шанс, что в доме сидит пулемётчик
-const MG_FIRE_T = 14 * 60;      // кадров огня
-const MG_REST_T = 4 * 60;       // кадров отдыха
-const MG_CD = 5;                // кадров между выстрелами (12 в секунду)
-const MG_SPREAD = 0.14;         // разброс каждой пули, рад
-const MG_BIAS = 0.22;           // медленно «плывущий» перекос прицела, рад
-function spawnGunners() {
-	for (const c of props) {
-		if (c.type !== 'house' || !c.mg) continue;
-		const side = -1;                                              // только левое окно: стреляет влево, в сторону игрока
-		const x = side < 0 ? c.x + HOUSE_WALL + 30 : c.x + c.w - HOUSE_WALL - 30;
-		spawnFoe(x, foes.length);
-		const e = foes[foes.length - 1];
-		e.hero.ammo = 1e9;                                            // ленту не кончить
-		Object.assign(e, {
-			gunner: true, house: c, side,
-			wx: side < 0 ? c.x + HOUSE_WALL / 2 : c.x + c.w - HOUSE_WALL / 2,   // середина стены в окне
-			wy: GROUND - (HOUSE_WIN_LO + HOUSE_WIN_HI) / 2,
-			mgT: Math.random() * (MG_FIRE_T + MG_REST_T), mgPh: Math.random() * Math.PI * 2, firing: false
-		});
-	}
-}
-function gunnerThink(e) {
-	const k = e.keys, h = e.hero, st = e.health.state;
-	k.KeyA = k.KeyD = k.KeyR = k.ShiftLeft = false;
-	k.KeyS = true;                                                    // сидит и не двигается
-	h.treat = null;
-	combatThink(e);                                                   // инициализация бойца; цель и оружие ниже переопределяем
-	if (st.dead) return;
-	e.mgT++;
-	e.firing = e.mgT % (MG_FIRE_T + MG_REST_T) < MG_FIRE_T;          // 14 с огня, 4 с отдыха
-	let best = null, bd = FIRE_RANGE;
-	for (const u of everyone()) {                                     // цель — только по ту сторону дома, где его окно
-		if (!canTarget(u)) continue;
-		const tx = u.hero.p.chest.x, d = Math.abs(tx - e.wx);
-		if ((tx - e.wx) * e.side <= 0 || d >= bd) continue;
-		bd = d; best = u;
-	}
-	e.tgt = best;
-	h.gunWant = e.firing;
-	h.gunRestore = false;
-	if (e.firing) {
-		const c = h.p.chest;
-		h.aimWant = best ? Math.atan2(best.hero.p.chest.y - c.y, best.hero.p.chest.x - c.x) : (e.side > 0 ? 0 : Math.PI);
-	} else h.aimWant = e.side > 0 ? 0 : Math.PI;                      // в отдыхе оружие опущено, но смотрит в сторону окна
-}
-function gunnerShoot(e) {
-	const h = e.hero, st = e.health.state;
-	if (won || st.dead || st.ko > 0 || e.stun > 0 || !e.firing || !e.tgt) return;
-	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5) return;
-	const t = e.tgt.hero.p.chest;
-	const a = Math.atan2(t.y - e.wy, t.x - e.wx)
-		+ Math.sin(e.mgT * 0.02 + e.mgPh) * MG_BIAS                   // прицел медленно «плывёт»
-		+ (Math.random() - 0.5) * 2 * MG_SPREAD;                      // плюс разброс на каждую пулю
-	bullets.push({ x: e.wx, y: e.wy, px: e.wx, py: e.wy, vx: Math.cos(a) * 60, vy: Math.sin(a) * BULLET_SPEED, life: 90, foe: true, sn: false, dmg: 2.5, sx: e.wx });
-	flashes.push({ x: e.wx, y: e.wy, a, life: 7, max: 7 });           // пули и вспышка — из окна
-	h.shootCD = MG_CD;
-	h.p.chest.px -= Math.cos(h.aimA) * 1.2; h.p.chest.py -= Math.sin(h.aimA) * 1.2;   // отдача
-}
-function spawnFoe(x, i) {
-  const h = createHero(x);
-  h.foe = true;
-  h.speedK = 0.65 + Math.random() * 0.6;     // у каждого своя скорость
-  h.phase = Math.random() * Math.PI * 2;
-  tintFoe(h, i);
-  const fh = makeHealth(false);
-  fh.state.armor = 0; h.armorOff = true;      // бронежилеты только у наших
-  foes.push({ hero: h, health: fh, keys: {}, stun: 0, foe: true });
-}
-function spawnWave() {
-  const alive = foes.filter(e => !e.health.state.dead && !e.gunner).length;
-  const n = Math.min(FOE_MAX - alive, 2 + Math.floor(Math.random() * 3));
-  if (n <= 0) return;
-  const baseX = FINISH_X;                                // подкрепление всегда выходит с базы
-  for (let i = 0; i < n; i++) spawnFoe(Math.min(WORLD_W - 60, baseX + i * 70 + Math.random() * 60), foes.length + i);
-}
-// 5–7 групп врагов на разном расстоянии от базы; идут от базы навстречу игроку
-function spawnFoeGroups() {
-  const n = FOE_GROUPS_MIN + Math.floor(Math.random() * (FOE_GROUPS_MAX - FOE_GROUPS_MIN + 1));
-  const dMax = FINISH_X - START_X - FOE_GROUP_CLEAR;       // дальше от базы — уже рядом со стартом
-  const slot = (dMax - FOE_GROUP_MIN_DIST) / n;
-  for (let g = 0; g < n; g++) {
-    const d = FOE_GROUP_MIN_DIST + (g + 0.15 + Math.random() * 0.7) * slot;   // каждая группа в своей «полосе» от базы
-    const gx = FINISH_X - d;
-    const size = 2 + Math.floor(Math.random() * 2);        // 2–3 бойца в группе
-    for (let i = 0; i < size; i++) spawnFoe(gx + i * 60 + Math.random() * 20, foes.length);
-  }
-}
-// цель, по которой стреляют: живой, в сознании, не в болевом шоке (лежачих без сознания не добивают)
-const canTarget = u => { const st = u.health.state; return !st.dead && st.ko === 0 && !st.shock; };
-// общий «мозг» боя: выбор цели, оружие, прицел (для союзников и врагов)
-function combatThink(a) {
-  const h = a.hero, st = a.health.state;
-  if (a.init === undefined) {                 // первичная настройка бойца
-    a.init = true;
-    h.gun = 0; h.gunWant = false;             // оружие за спиной
-    a.seeT = 0; a.tgt = null; a.deadT = 0;
-    a.coverX = null; a.coverT = 0; a.coverOff = Math.random() * 40;   // coverOff — чтобы не стояли в одной точке
-    a.cover = Math.random() < 0.5;            // будет ли пригибаться под огнём
-    a.holdD = (h.foe ? 320 : 380) + Math.random() * 280;     // на какой дистанции останавливается
-    a.fire = (h.foe ? 0.035 : 0.05) + Math.random() * 0.035; // «частота» стрельбы
-    h.spread = (h.foe ? 0.04 : 0.03) + Math.random() * 0.03; // разброс, рад
-    if (!h.foe) h.speedK = 0.92 + Math.random() * 0.16;
-    if (h.sniper) { a.fire = 0.15; h.spread = 0.002; }   // снайпер: почти без разброса
-  }
-  h.gunRestore = false;                       // оружие сам не достаётся после падения
-  h.aimWant = null;
-  a.tgt = null;
-  if (st.dead) { h.gunWant = false; return; }
-  const x = h.p.pelvis.x;
-  let bd = h.sniper ? SNIPER_RANGE : SIGHT;
-  for (const u of (h.foe ? everyone() : foes)) {
-    if (!canTarget(u)) continue;
-    const d = Math.abs(u.hero.p.pelvis.x - x);
-    if (d < bd) { bd = d; a.tgt = u; }
-  }
-  if (a.heardT > 0) {                                        // услышал звон каски
-    a.heardT--;
-    if (!a.tgt) {                                            // цели не видит — достаёт оружие и смотрит на звук
-      a.seeT = Math.max(a.seeT, 60);
-      h.aimWant = a.heardX < x ? Math.PI : 0;
-    }
-  }
-  if (a.tgt) a.seeT = 150; else if (a.seeT > 0) a.seeT--;   // убирает оружие через 2.5 с после потери цели
-  h.gunWant = a.seeT > 0 && !h.carrying;
-  const td = a.tgt ? Math.abs(a.tgt.hero.p.pelvis.x - x) : Infinity;
-  if (td < a.holdD + 180) {                                  // подошли к дистанции огня — выбираем укрытие и держимся за него
-    if (a.coverX != null && ++a.coverAge > 300) a.coverX = null;   // раз в 5 с пересматриваем выбор
-    if (a.coverX == null && --a.coverT <= 0) { a.coverT = 40; a.coverAge = 0; a.coverX = findCover(a); }
-  } else if (td > a.holdD + 400) { a.coverX = null; a.coverT = 0; }   // гистерезис: на границе дальности укрытие не теряется
-  if (a.tgt) {
-    const c = h.p.chest;
-    let t = a.tgt.hero.p.chest;
-    if (h.sniper) {                                         // целится в голову с упреждением на движение цели
-      const th = a.tgt.hero.p.head;
-      const fl = Math.hypot(th.x - c.x, th.y - c.y) / SNIPER_SPEED;
-      t = { x: th.x + (th.x - th.px) * fl, y: th.y + (th.y - th.py) * fl };
-    }
-    h.aimWant = Math.atan2(t.y - c.y, t.x - c.x);
-  }
-}
-// X, где встать за ближайшим укрытием (между бойцом и целью), или null
-function findCover(a) {
-  const x = a.hero.p.pelvis.x, tx = a.tgt.hero.p.pelvis.x;
-  const s = Math.sign(tx - x) || 1;                       // в какую сторону враг
-  let best = null, bd = 380;
-  for (const c of props) {
-    if (c.deco) continue;
-    if (s > 0 ? c.x + c.w > tx - 60 : c.x < tx + 60) continue;   // укрытие должно быть до цели, а не за ней
-    const spot = s > 0 ? c.x - 22 - a.coverOff : c.x + c.w + 22 + a.coverOff;   // со стороны, противоположной врагу
-    if ((spot - x) * s < -40) continue;                      // укрытие позади бойца — не берём
-    const d = Math.abs(spot - x);
-    if (d < bd) { bd = d; best = spot; }
-  }
-  return best;
-}
-function aiShoot(a) {
-  const h = a.hero, st = a.health.state;
-  if (won || st.dead || st.ko > 0 || h.gun < 1) return;
-  if (h.ammo <= 0 || h.magOut || (!a.tgt && h.ammo < magSize(h) * 0.5)) startReload(h, a.health);   // пусто — перезарядка; цели нет и меньше половины — подзаряжается
-  if (!a.tgt || h.aimWant == null || h.shootCD > 0) return;
-  if (Math.abs(a.tgt.hero.p.pelvis.x - h.p.pelvis.x) > (h.sniper ? SNIPER_RANGE : FIRE_RANGE)) return;
-  if (Math.random() < a.fire) shootUnit(h);
-}
-function foeThink(e) {
-  const k = e.keys, st = e.health.state, h = e.hero, x = h.p.pelvis.x;
-  k.KeyA = k.KeyD = k.KeyR = k.KeyS = k.ShiftLeft = false;
-  h.treat = null;
-  combatThink(e);
-  if (st.dead || e.stun > 0 || st.ko > 0) return;
-  let dir = x > 150 ? -1 : 0;                  // идут от базы навстречу
-  if (e.tgt) {
-    const dx = e.tgt.hero.p.pelvis.x - x;
-    dir = Math.abs(dx) > e.holdD ? Math.sign(dx) : 0;
-    if (e.coverX != null) {                      // идём в укрытие и пригибаемся за ним
-      const cx = e.coverX - x;
-      dir = Math.abs(cx) > 14 ? Math.sign(cx) : 0;
-      if (dir === 0) k.KeyS = true;
-    } else if (dir === 0 && e.cover) k.KeyS = true;
-  } else if (e.heardT > 0 && Math.abs(e.heardX - x) > 250) dir = Math.sign(e.heardX - x);   // услышал звон — идёт на звук
-  dir = steadyDir(e, dir);
-  if (dir > 0) k.KeyD = true; else if (dir < 0) k.KeyA = true;
-}
-function updateFoes() {
-  if (!won && --foeTimer <= 0) {
-    foeTimer = FOE_WAVE_MIN + Math.random() * (FOE_WAVE_MAX - FOE_WAVE_MIN);
-    spawnWave();
-  }
-  for (let i = foes.length - 1; i >= 0; i--) {
-    const e = foes[i];
-    if (e.gunner) gunnerThink(e); else foeThink(e);
-    runAs(e, stepHero);
-    if (e.gunner) gunnerShoot(e); else aiShoot(e);
-    if (e.health.state.dead && ++e.deadT > 900 && !onScreen(e.hero.p.pelvis.x - 150, 300)) foes.splice(i, 1);
-  }
-}
-const BANDAGE_WALK = 0.7;
-const STRUGGLE_NEED = 6;       // очков, чтобы очнуться без сознания (каждое нажатие A/D даёт +1)
-const STRUGGLE_DECAY = 0.06;   // убывание очков за кадр (≈3,6/с): жать надо часто, 6–8 раз в секунду
-function struggleStep(h) {
-  if (h.struggle > 0) h.struggle = Math.max(0, h.struggle - STRUGGLE_DECAY);
-  const st = Health.state;
-  if (st.dead || st.ko === 0) { h.struggle = 0; return; }
-  if (h.struggle >= STRUGGLE_NEED) {                          // очнулся: встанет, но очень конфузно
-    h.struggle = 0;
-    Health.wake();
-    stun = 0;
-  }
-}
-const TRANSFUSE_RATE = 0.15;
-// ===== Станции с бронёй: подбор сразу, как только боец рядом и броня изношена =====
-function nearestArmor(x, maxD) {
-  let best = null;
-  for (const c of props) {
-    if (c.type !== 'armor' || c.left <= 0) continue;
-    const d = Math.abs(c.x + c.w / 2 - x);
-    if (d < maxD && (!best || d < best.d)) best = { c, d };
-  }
-  return best && best.c;
-}
-function updateArmor() {
-  for (const u of everyone()) {
-    if (!u.health.conscious() || !u.health.needsArmor()) continue;
-    const h = u.hero, x = h.p.pelvis.x;
-    const c = props.find(s => s.type === 'armor' && s.left > 0 && x > s.x - 30 && x < s.x + s.w + 30);
-    if (!c) continue;
-    c.left--;
-    u.health.rearm();
-    h.helmetOff = h.armorOff = false;                         // каска и жилет снова на месте — при разрушении слетят заново
-    for (let i = 0; i < 8; i++) {                             // облачко пыли при экипировке
-      const life = 30 + Math.random() * 20;
-      dust.push({ x: x + (Math.random() - 0.5) * 30, y: h.p.chest.y + (Math.random() - 0.5) * 30, vx: (Math.random() - 0.5) * 2, vy: -Math.random() * 1.5,
-        r: 6 + Math.random() * 6, grow: 0.4, life, max: life, a: 0.5, c: '150,160,120' });
-    }
-  }
-}
-function nearMedkit() {
-  const x = hero.p.pelvis.x;
-  return props.find(c => c.type === 'medkit' && c.left > 0 && x > c.x - 40 && x < c.x + c.w + 40) || null;
-}
-// ===== Койка в доме: R рядом — лечь, идёшь — встаёшь; лёжа лечит быстрее перевязки =====
-const cotX = c => c.x + c.w / 2;
-function nearCot(x, h) {
-  return props.find(c => c.type === 'house' && (!c.user || c.user === h) && Math.abs(cotX(c) - x) < COT_LEN / 2 + 20) || null;
-}
-function nearestCot(x, h) {
-  let best = null;
-  for (const c of props) {
-    if (c.type !== 'house' || (c.user && c.user !== h)) continue;
-    const d = Math.abs(cotX(c) - x);
-    if (d < 600 && (!best || d < best.d)) best = { c, d };
-  }
-  return best && best.c;
-}
-function releaseCot(h) {
-  if (h.cot) { h.cot.user = null; h.cot = null; }
-}
-function isHealed(st) {
-  const w = st.wound;
-  return st.blood >= 99 && !(w.head || w.torso || w.arms || w.legs) &&
-    st.parts.head >= 90 && st.parts.torso >= 90 && st.parts.arms >= 90 && st.parts.legs >= 90;
-}
-// ===== Перенос: боец тащит потерявшего сознание к ближайшему медику =====
-function isDown(u) {
-  const st = u.health.state;
-  return !st.dead && (st.ko > 0 || st.broken || (u.hero === hero ? stun : u.stun) > 0);
-}
-function nearestMedic(x, ex) {
-  let best = null;
-  for (const m of squad) {
-    if (m === ex || !m.isMedic || m.health.state.dead || m.health.state.ko > 0 || m.stun > 0) continue;
-    const d = Math.abs(m.hero.p.pelvis.x - x);
-    if (!best || d < best.d) best = { m, d };
-  }
-  return best && best.m;
-}
-function dropCarry(a, cd = 120) {
-  if (a.carry) {
-    a.carry.hero.carriedBy = null;
-    a.carry.hero.noCarryT = Math.max(a.carry.hero.noCarryT || 0, cd);   // этого бойца некоторое время никто не поднимает
-    a.carry = null;
-  }
-  a.hero.carrying = false;
-  a.carryCD = Math.max(a.carryCD || 0, 120);                            // и сам носильщик 2 с не берёт новых
-}
-// несомый раненый «висит» на плече носильщика: тело сдвигается к его груди, конечности болтаются
-function updateCarry() {
-  for (const u of everyone()) if (u.hero.noCarryT > 0) u.hero.noCarryT--;
-  for (const a of squad) {
-    if (a.carryCD > 0) a.carryCD--;
-    if (!a.carry) continue;
-    const c = a.hero, p = a.carry.hero;
-    const dx = c.p.chest.x - c.f * 6 - p.p.chest.x;
-    const dy = c.p.chest.y - 16 - p.p.chest.y;
-    for (const q of Object.values(p.p)) {
-      q.x += dx; q.y += dy; q.px += dx; q.py += dy;
-      q.px += (q.x - q.px) * 0.3;                              // гасим скорость, чтобы не раскачивало
-      q.py += (q.y - q.py) * 0.3;
-    }
-  }
-}
-// личный медик держится чуть позади игрока и подтягивается, если отстал
-function followPlayer(a, x) {
-  const d = (hero.p.pelvis.x - 70) - x;
-  a.hero.speedK = 1 + Math.min(0.4, Math.max(0, Math.abs(d) - 40) / 300);
-  return Math.abs(d) > 30 ? Math.sign(d) : 0;
-}
-function pickWound(skipLegs) {
-  const st = Health.state;
-  const started = p => hero.wrap[p] > 0 && hero.wrap[p] < WRAP_T;
-  let best = null;
-  for (const p in st.wound) {
-    if (!st.wound[p]) continue;
-    if (skipLegs && p === 'legs') continue;      // на ходу ноги не бинтуются
-    if (best === null || (started(p) && !started(best)) ||
-        (started(p) === started(best) && st.parts[p] < st.parts[best])) best = p;
-  }
-  return best;
-}
-const WRAP_T = 150;
-const BAND_AXIS = { head: ['neck', 'head'], torso: ['pelvis', 'chest'], arms: ['elbowB', 'wristB'], legs: ['pelvis', 'kneeF'] };   // вдоль какой кости идут витки
-const TREAT_REACH = 60;    // на каком расстоянии игрок может лечить бойца отряда, px
-function bandGeom(part) {                                  // точка раны и ось части (для текущего hero; вызывать через withUnit)
-  const P = hero.p, [an, bn] = BAND_AXIS[part];
-  const dx = P[bn].x - P[an].x, dy = P[bn].y - P[an].y;
-  const len = Math.hypot(dx, dy) || 1;
-  return { t: woundPoint(part), ux: dx / len, uy: dy / len };
-}
-function pickPatient(h) {                                  // кого лечит игрок: раненый из отряда под курсором, а если сам цел — ближайший раненый рядом
-  const selfWound = !!pickWound(false);
-  let best = null;
-  for (const a of squad) {
-    const st = a.health.state;
-    if (st.dead || !(st.wound.head || st.wound.torso || st.wound.arms || st.wound.legs)) continue;
-    const d = Math.abs(a.hero.p.pelvis.x - h.p.pelvis.x);
-    if (d > TREAT_REACH) continue;
-    const m = Math.abs(a.hero.p.pelvis.x - mouse.x);
-    const score = m < 80 ? m - 1000 : (selfWound ? Infinity : d);   // курсор на бойце — приоритет; иначе только если сам не ранен
-    if (score !== Infinity && (!best || score < best.score)) best = { a, score };
-  }
-  return best && best.a;
-}
-const MEDIC_RATE = 3;   // медик бинтует в 3 раза быстрее (50 кадров вместо 150)
-const PAIN_BANDAGE_MIN = 0.4;                                   // при максимальной боли бинтуют со скоростью 40%
-const painSlow = p => 1 - (1 - PAIN_BANDAGE_MIN) * p;          // множитель скорости бинтования от боли
-const CONCUSS_HELP = 0.15;   // с такой контузии медик уже занимается бойцом, даже если тот не ранен
-const SOAK_RATE = 0.001;
-const SOAK_LEAK = 0.001;
-const SOAK_LEAK_MAX = 0.5;
-function woundPoint(part) {
-  const P = hero.p;
-  const mix = (a, b, t) => ({ x: lerp(P[a].x, P[b].x, t), y: lerp(P[a].y, P[b].y, t) });
-  if (part === 'head') return mix('neck', 'head', 0.8);
-  if (part === 'torso') return mix('pelvis', 'chest', 0.55);
-  if (part === 'arms') return mix('elbowB', 'wristB', 0.5);
-  return mix('pelvis', 'kneeF', 0.6);
-}
-function stepHero() {
-  const h = hero;
-  const P = h.p;
-  const entries = Object.entries(P);
-  let dir = 0;
-  if (keys.KeyA || keys.ArrowLeft) dir -= 1;
-  if (keys.KeyD || keys.ArrowRight) dir += 1;
-  if (stun > 0) stun--;
-  Health.update();
-  updateWounds();
-  if (h.diveReq > 0) h.diveReq--;
-  if (h.isPlayer) struggleStep(h);
-  if (h.isPlayer) keys.KeyR = !!(h.bandWant && mouseDown);   // у игрока лечение = ЛКМ с бинтом в руке (настоящий R только перезаряжает)
-  const canStand = standing && stun <= 0 && Health.conscious() && Health.canRise();
-  if (h.cot && (dir !== 0 || Health.state.dead)) releaseCot(h);   // пошёл или погиб — койка свободна
-  const wantLie = !!(keys.ShiftLeft || keys.ShiftRight || h.cot);
-  const armed = h.isPlayer && (h.gunWant || h.gun > 0.05);          // оружие в руках: R — перезарядка, лечиться нельзя (сначала 1)
-  const canAct = canStand && !h.getup && h.bal > 0.5 && h.lie < 0.5 && !armed;
-  h.rollU = -1;                                                      // прогресс бинтования для анимации мотка; -1 — моток не разматывается
-  if (h.isPlayer) {                                                  // ЛКМ с бинтом рядом с раненым из отряда — лечим его
-    h.treat = (keys.KeyR && canAct && dir === 0) ? pickPatient(h) : null;
-    if (h.treat) { h.treat.hero.beingTreated = 3; keys.KeyR = false; }   // пациент стоит; себя / аптечку / койку в этот кадр не трогаем
-  }
-  if (!h.cot && keys.KeyR && canAct && dir === 0) {               // R у койки — лечь
-    const cot = nearCot(h.p.pelvis.x, h);
-    if (cot) { cot.user = h; h.cot = cot; }
-  }
-  if (h.cot && h.lie > 0.8 && !Health.state.dead) {               // на койке: быстрое лечение, тело сдвигается на матрас
-    Health.rest();
-    const tx = cotX(h.cot) - h.f * 40;
-    const sh = Math.max(-1.5, Math.min(1.5, (tx - h.p.pelvis.x) * 0.05));
-    for (const q of Object.values(h.p)) { q.x += sh; q.px += sh; }
-  }
-  if (!keys.KeyR || !canAct) h.bandPart = null;
-  h.box = (keys.KeyR && canAct && dir === 0 && Health.state.blood < 100) ? nearMedkit() : null;
-  if (h.box) h.bandPart = null;
-  else if (keys.KeyR && canAct && !(h.bandPart && Health.state.wound[h.bandPart])) h.bandPart = pickWound(dir !== 0);
-  if (dir !== 0 && h.bandPart === 'legs') h.bandPart = null;
-  h.bandaging = !!(h.box || h.bandPart);
-  if (h.box || h.bandPart === 'legs') dir = 0;
-  for (const part in h.wrap) {
-    const done = h.wrap[part] >= WRAP_T;
-    if (Health.state.wound[part] && done && h.soak[part] < 1) {
-      h.wrap[part] = 0;
-      h.soak[part] = 0;
-    } else if (done && !Health.state.wound[part] && Health.state.parts[part] >= 100) {
-      const wp = woundPoint(part);
-      for (let i = 0; i < 4; i++) {
-        debris.push({
-          x: wp.x + (Math.random() - 0.5) * 12, y: wp.y,
-          vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2,
-          s: 4, life: 300, max: 300, c: i % 2 ? '#d9d6c8' : '#f1efe4'
-        });
-      }
-      h.wrap[part] = 0;
-      h.soak[part] = 0;
-    } else if (done && !Health.state.wound[part] && !Health.state.dead) {
-      const w = 0.2 + (1 - Health.state.parts[part] / 100);
-      h.soak[part] = Math.min(1, h.soak[part] + Health.state.bleed * SOAK_RATE * w);
-      if (h.soak[part] >= 1) Health.state.wound[part] = true;
-    } else if (done && h.soak[part] >= 1 && !Health.state.dead) {
-      Health.state.bleed = Math.min(SOAK_LEAK_MAX, Health.state.bleed + SOAK_LEAK);
-    }
-  }
-  if (!canStand) { h.bal = 0; h.getup = null; }
-  else if (h.getup) h.bal = 0;
-  else {
-    if (h.bal === 0 && !isUpright(h)) h.getup = startGetUp(h);
-    else if (h.diveReq > 0 && h.bal > 0.5 && h.lie < 0.5 && isUpright(h)) { h.diveReq = 0; h.getup = startDive(h); }
-    else if (h.bal > 0.5 && wantLie && h.lie < 0.5 && isUpright(h)) h.getup = startLieDown(h);
-    else if (h.bal > 0.5 && !wantLie && h.lie > 0.6) h.getup = startGetUp(h, 18);
-    if (h.getup) h.bal = 0;
-    else h.bal = Math.min(1, h.bal + 0.02 * (1 - Health.state.concussion * 0.6));
-  }
-	if (h.isPlayer) {
-		let dyAim = mouse.y - P.chest.y;
-		if (dyAim > 30) dyAim = 30;
-		h.aimA = Math.atan2(dyAim, mouse.x - P.chest.x);
-	} else {
-		h.aimA = h.aimWant != null ? h.aimWant : (h.f > 0 ? 0 : Math.PI);
-	}
-	let faceDir = dir;
-	if (faceDir === 0 && (h.isPlayer || h.aimWant != null) && h.bal > 0.5 && !h.getup && Math.abs(Math.cos(h.aimA)) > 0.25 && (h.isPlayer || !(h.turnCD > 0))) {
-		faceDir = Math.cos(h.aimA) > 0 ? 1 : -1;
-	}
-	if (faceDir !== 0 && h.bal > 0.5 && faceDir !== h.f) {
-		const cx = h.p.pelvis.x;
-		for (const q of Object.values(h.p)) { q.x = 2 * cx - q.x; q.px = 2 * cx - q.px; }
-		h.f = faceDir;
-		if (!h.isPlayer) h.turnCD = 45;                  // боты после разворота 0,75 с не разворачиваются по прицелу
-		if (!h.isPlayer && h.aimWant == null) h.aimA = h.f > 0 ? 0 : Math.PI;
-	}
-	const inControl = h.bal > 0.6 && !h.getup && h.lie < 0.3 && Health.conscious();
-	if (h.bandWant && (!inControl || h.nadeAim || h.throwT > 0)) h.bandWant = false;   // упал / бросок гранаты — бинт убран
-	if (h.isPlayer) nadeStep(h);
-	reloadStep(h);
-	const busy = h.bandaging || h.treat || h.nadeAim || h.throwT > 0;                  // перевязка / лечение: руки заняты, оружие убираем
-	if ((!inControl || busy) && h.gunWant) { h.gunWant = false; h.gunRestore = true; }
-	if (inControl && !busy && h.bal > 0.95 && h.gunRestore) { h.gunWant = true; h.gunRestore = false; }
-	const gunSpd = (h.nadeAim || h.throwT > 0) ? 0.12 : (h.gunWant || inControl ? 0.05 : 0.12);
-	h.gun = h.gunWant ? Math.min(1, h.gun + gunSpd) : Math.max(0, h.gun - gunSpd);
-	if (h.shootCD > 0) h.shootCD--;
-	if (h.turnCD > 0) h.turnCD--;
-	if (h.isPlayer && mouseDown) shootUnit(h);
-  for (const [, p] of entries) {
-    const vx = (p.x - p.px) * DAMPING;
-    const vy = (p.y - p.py) * DAMPING;
-    p.fx = p.x; p.plant = false;
-    p.px = p.x; p.py = p.y;
-    p.x += vx;
-    p.y += vy + GRAVITY;
-  }
-  if (h.getup) {
-    getUpStep(h, entries);
-    h.flinch = null;
-  } else if (h.bal > 0) {
-    const f = h.f;
-    const walking = dir !== 0 && h.bal > 0.6;
-    h.walk += ((walking ? 1 : 0) - h.walk) * 0.12;
-    const w = h.walk;
-    const wantLie = (keys.ShiftLeft || keys.ShiftRight || h.cot) ? 1 : 0;
-    const wantCrouch = (!wantLie && (keys.KeyS || keys.ArrowDown || (h.bandaging && dir === 0))) ? 1 : 0;
-    h.lie += (wantLie - h.lie) * 0.08;
-    h.crV = (h.crV || 0) * 0.75 + (wantCrouch - h.crouch) * 0.045;   // пружина: приседание с лёгким «доседанием»
-    h.crouch = Math.max(0, Math.min(1.1, h.crouch + h.crV));
-    if (h.crouch === 0 && h.crV < 0) h.crV = 0;
-    const lie = h.lie, cr = h.crouch;
-    const fx = bodyFx(h, w, cr, lie);                                // дыхание, перенос веса, инерция, попадания
-    const amp = GAIT.amp * (1 - 0.35 * cr - 0.2 * lie);
-    const liftH = GAIT.lift * (1 - 0.4 * cr - 0.5 * lie);
-    const spd = Health.speedMul() * (h.speedK || 1) * (1 - 0.25 * cr - 0.7 * lie) * (h.bandaging ? BANDAGE_WALK : 1) * (h.carrying ? 0.6 : 1);
-    if (walking) h.phase += GAIT.speed * spd * Math.PI / (2 * amp);
-    const standH = h.standH - CROUCH_DROP * cr - GAIT.bob * Math.abs(Math.sin(h.phase)) * w * (1 - cr) - (Health.state.lame ? 7 * w : 0) - fx.drop;   // хромота: корпус просел
-    const wantH = lerp(standH, RADIUS.pelvis, lie);
-    const onGround = ['ankleB', 'ankleF', 'toeB', 'toeF'].some(n => P[n].y >= GROUND - P[n].r - 2);
-    if (lie < 0.3 && onGround) h.tone = Math.max(0, Math.min(30, h.tone + (wantH - (GROUND - P.pelvis.y)) * 0.03));
-    else if (lie >= 0.3) h.tone *= 0.9;
-    const hipH = wantH + h.tone * (1 - lie);
-
-    const g = { B: gait(h.phase, amp, liftH), F: gait(h.phase + Math.PI, amp, liftH) };
-    const soft = h.bal * h.bal;
-    const kUp = 0.3 * soft;
-    const kLeg = 0.5 * soft;
-    const pull = (p, tx, ty, kk) => { p.x += (tx - p.x) * kk; p.y += (ty - p.y) * kk; };
-    for (const [, p] of entries) {
-      p.px += (p.x - p.px) * 0.08 * h.bal;
-      p.py += (p.y - p.py) * 0.08 * h.bal;
-    }
-    const out = tipping(P);
-    const hold = lie > 0.5 ? 1 : Math.max(0, Math.min(1, 1 - (out - 4) / TIP_MARGIN));
-    for (const s of ['B', 'F']) {
-      const drag = Health.state.lame && s === Health.state.dragLeg;   // ноги в 0% — одну ногу волочит
-      const lift = drag ? 0 : g[s].lift * w;
-      const ank = P['ankle' + s], toe = P['toe' + s], knee = P['knee' + s];
-      const gx = (drag ? STANCE[s] + (-GAIT.amp * 0.9 - STANCE[s]) * w : STANCE[s] + (g[s].x - STANCE[s]) * w) + Health.wobble(s === 'B' ? 1 : 4) * 7 + fx.shift;
-      const planted = lift < 1.2 && lie < 0.5;
-      const contact = ank.y >= GROUND - ank.r - 1.5 || toe.y >= GROUND - toe.r - 1.5;
-      const fixed = planted && contact && !drag;
-      const oxS = f * gx, oyS = hipH - RADIUS.ankle - lift;
-      const oxL = -f * (82 - 0.4 * g[s].x * w), oyL = -7 - lift * 0.8;
-      const ox = lerp(oxS, oxL, lie), oy = lerp(oyS, oyL, lie);
-      muscle(P.pelvis, ank, ox, oy, kLeg, fixed ? 1 : 0.08, fixed ? 0.03 : 1, hold);
-      const toeLift = lerp(lift, lift * 0.6, lie);
-      muscle(ank, toe, f * S.foot * (1 - 2 * lie), (GROUND - RADIUS.toe - toeLift) - ank.y, kLeg, 0, fixed ? 0.03 : 1);
-      const kn = kneeIK(P.pelvis, ank, f);
-      if (lie > 0) kn.y = lerp(kn.y, Math.min(kn.y, GROUND - RADIUS.knee), lie);
-      pull(knee, kn.x + Health.wobble(s === 'B' ? 2 : 5) * 5, kn.y, kLeg * 0.8);
-      if (planted && !drag) { ank.plant = true; toe.plant = true; }
-    }
-    const rel = (a, b) => ({ x: (h.off[b].x - h.off[a].x) * f, y: h.off[b].y - h.off[a].y });
-    const sway = (Health.sway() + (Health.state.lame ? f * 0.7 * w : 0)) * (1 - lie);   // хромота: корпус клонит вперёд
-    const sp = rel('pelvis', 'chest'), nk = rel('chest', 'neck'), hd = rel('neck', 'head');
-    muscle(P.pelvis, P.chest,
-      lerp(sp.x + f * (3 * w + 8 * cr) + sway * 7, f * PRONE.chest.fx, lie) + fx.cx,
-      lerp(sp.y, PRONE.chest.y + RADIUS.pelvis, lie) + fx.cy, kUp);
-    muscle(P.chest, P.neck,
-      lerp(nk.x + f * (1 * w + 5 * cr) + sway * 5, f * (PRONE.neck.fx - PRONE.chest.fx), lie) + fx.nx,
-      lerp(nk.y, PRONE.neck.y - PRONE.chest.y, lie) + fx.ny, kUp);
-    muscle(P.neck, P.head,
-      lerp(hd.x + f * (1 * w + 5 * cr) + sway * 5, f * (PRONE.head.fx - PRONE.neck.fx), lie) + fx.hx,
-      lerp(hd.y, PRONE.head.y - PRONE.neck.y, lie) + fx.hy, kUp);
-		const aiming = h.bal > 0.6 && lie < 0.3 && !h.bandaging && !h.treat && h.gun > 0.5 && !h.nadeAim && !(h.throwT > 0);
-		if (aiming) {
-			const ax = Math.cos(h.aimA), ay = Math.sin(h.aimA);
-			const cc = P.chest;
-			const fl = Math.cos(h.aimA) < 0 ? -1 : 1;
-			const gx = (lx, ly) => ({ x: cc.x + ax * lx - ay * ly * fl, y: cc.y + ay * lx + ax * ly * fl });
-			const rl = reloadPose(h);                                   // перезарядка: рука идёт к магазину и держится у него
-			const gF = gx(13, 9), gB = gx(41 - 26 * rl, 2 + 20 * rl);
-			const txB = gB.x, tyB = gB.y;
-			const txF = gF.x, tyF = gF.y;
-			const armB = ik2(cc, { x: txB, y: tyB }, S.upperArm, S.foreArm, -h.f, true);
-			const armF = ik2(cc, { x: txF, y: tyF }, S.upperArm, S.foreArm, -h.f, true);
-			pull(P.wristB, armB.end.x, armB.end.y, 0.9, 14);
-			pull(P.wristF, armF.end.x, armF.end.y, 0.9, 14);
-			pull(P.elbowB, armB.mid.x, armB.mid.y, 0.9, 14);
-			pull(P.elbowF, armF.mid.x, armF.mid.y, 0.9, 14);
-		} else {
-			for (const s of ['B', 'F']) {
-				if (s === 'F' && (h.nadeW > 0.01 || h.throwT > 0)) continue;   // рукой с гранатой управляет nadeArm
-				const opp = s === 'B' ? g.F : g.B;
-				const sw = opp.x * w;
-				const handLift = opp.lift * w * 0.5;
-				for (const [part, mul, reach, mulL] of [['elbow', 0.35, 30, 0.4], ['wrist', 0.7, 48, 0.8]]) {
-					const n = part + s, q = P[n], o = rel('chest', n);
-					const tx = o.x + f * sw * mul + Health.wobble(s === 'B' ? 0 : 2.5) * 10 * mul;
-					const lx = f * (reach + mulL * sw);
-					const ly = RADIUS.chest - RADIUS[part] - handLift;
-					const grip = lie > 0.5 && handLift < 1;
-					let mx = lerp(tx, lx, lie), my = lerp(o.y, ly - (grip && part === 'elbow' ? 22 : 0), lie);
-					const ck = (s === 'F' && h.bandWant) ? 0 : ease(h.coverK || 0);   // присел без оружия — руки к голове (той же мышцей, без телепорта)
-					if (ck > 0.001) {
-						const hc = P.head;
-						const cx = part === 'wrist' ? (s === 'B' ? hc.x - f * 4 : hc.x + f * 7) : (s === 'B' ? hc.x + f * 6 : hc.x + f * 17);
-						const cy = part === 'wrist' ? (s === 'B' ? hc.y - 11 : hc.y - 9) : (s === 'B' ? hc.y + 16 : hc.y + 10);
-						mx = lerp(mx, cx - P.chest.x, ck); my = lerp(my, cy - P.chest.y, ck);
-					}
-					muscle(P.chest, q, mx, my, kUp, 1, grip ? 0.1 : 1); // локоть приподнят, иначе подпирает грудь
-					if (grip && part === 'wrist') q.plant = true;
-				}
-			}
-		}
-		if (fx.grab && !aiming && !h.bandaging && !h.treat) flinchGrab(h, fx.grab);   // боец хватается за рану
-		if (h.gun > 0 && h.gun <= 0.5 && h.bal > 0.6 && lie < 0.3 && !h.bandaging && !h.treat) {
-			nudge(P.wristB, P.chest.x - f * 12, P.chest.y - 26, 0.6);
-			nudge(P.elbowB, P.chest.x - f * 16, P.chest.y - 6, 0.4);
-		}
-    if (h.nadeW > 0.01 || h.throwT > 0) nadeArm(h);        // бросок гранаты: замах → бросок → доводка
-    const cover = h.isPlayer && h.crouch > 0.5 && h.gun < 0.05 && !h.gunWant && !h.bandaging && !h.treat
-      && !h.nadeAim && !(h.throwT > 0) && h.bal > 0.6 && lie < 0.3 && Health.conscious();
-    h.coverK = (h.coverK || 0) + ((cover ? 1 : 0) - (h.coverK || 0)) * 0.15;
-    if (h.bandWant && !h.treat && lie < 0.3) {              // бинт в руке: кисть перед грудью
-      nudge(P.wristF, P.chest.x + f * 26, P.chest.y + 10, 0.4);
-      nudge(P.elbowF, P.chest.x + f * 10, P.chest.y + 22, 0.3);
-    }
-    if (h.box) {
-      const c = h.box;
-      const bx = c.x + c.w / 2, by = GROUND - c.h;
-      { const w = reachTo(P.chest, { x: bx, y: by - 4 }, 60); nudge(P.wristF, w.x, w.y, 0.3); }                                       // рука тянется к аптечке
-      nudge(P.elbowF, lerp(P.chest.x, bx, 0.5), lerp(P.chest.y, by, 0.5) + 10, 0.2);
-      const d = Math.min(c.left, 100 - Health.state.blood, TRANSFUSE_RATE);
-      c.left -= d;
-      Health.transfuse(d);
-    } else if (h.bandPart) {
-      const part = h.bandPart;
-      if (part) {
-        const t = woundPoint(part);
-        const [an, bn] = BAND_AXIS[part];
-        let ux = P[bn].x - P[an].x, uy = P[bn].y - P[an].y;       // ось части; поперёк неё руки передают моток
-        const ul = Math.hypot(ux, uy) || 1; ux /= ul; uy /= ul;
-        const wu = Math.min(1, h.wrap[part] / WRAP_T);
-        const a = (h.wrapT = (h.wrapT || 0) + 1) * 0.3;
-        const env = Math.min(1, wu / 0.1 + 0.25) * Math.min(1, (1 - wu) / 0.08 + 0.1);   // начало: подносит бинт, конец: руки сходятся — узел
-        const cs = Math.sin(a) * 12 * env;                         // размах поперёк части: руки расходятся и сходятся, перехватывая моток
-        const al = (wu - 0.5) * 8 + Math.cos(a) * 2.5 * env;       // вдоль части: витки ползут от начала к концу
-        const px = t.x + ux * al, py = t.y + uy * al;
-        h.rollU = wu; h.rollTg = t; h.rollArm = part === 'arms'; h.rollPart = part;   // для отрисовки мотка и наклона корпуса
-        const wF = reachTo(P.chest, { x: px - uy * cs, y: py + ux * cs }, 60); nudge(P.wristF, wF.x, wF.y, 0.5);
-        nudge(P.elbowF, lerp(P.chest.x, wF.x, 0.5) + f * 4, lerp(P.chest.y, wF.y, 0.5) + 12, 0.25);
-        if (part !== 'arms') { const wB = reachTo(P.chest, { x: px + uy * cs, y: py - ux * cs }, 60); nudge(P.wristB, wB.x, wB.y, 0.5); }
-        if (h.soak[part] >= 1) { h.wrap[part] = 0; h.soak[part] = 0; }
-        const rate = (h.isMedic ? MEDIC_RATE : 1) * painSlow(Health.state.pain);   // боль замедляет бинтование
-        Health.bandage(part, rate);
-        h.wrap[part] = Math.min(WRAP_T, h.wrap[part] + rate);
-        if (h.wrap[part] >= WRAP_T) Health.state.wound[part] = false;
-      }
-    }
-  }
-  if (h.treat && h.bal > 0 && !h.getup) {
-    const u = h.treat, ph = u.hero, hs = u.health;
-    const wp = withUnit(u, () => pickWound(false));
-    const part = wp || (h.isMedic && hs.state.concussion > CONCUSS_HELP ? 'head' : null);   // без раны — руки к голове
-    if (part) {
-      const bg = withUnit(u, () => bandGeom(part));
-      const t = bg.t;
-      const wu = Math.min(1, ph.wrap[part] / WRAP_T);
-      const ang = (h.wrapT = (h.wrapT || 0) + 1) * 0.3;
-      const env = Math.min(1, wu / 0.1 + 0.25) * Math.min(1, (1 - wu) / 0.08 + 0.1);   // начало: подносит бинт, конец: затягивает узел
-      const cs = Math.sin(ang) * 12 * env;                       // руки передают моток поперёк раненой части
-      const al = (wu - 0.5) * 8 + Math.cos(ang) * 2.5 * env;     // витки ползут вдоль неё
-      const px = t.x + bg.ux * al, py = t.y + bg.uy * al;
-      const wF = reachTo(P.chest, { x: px - bg.uy * cs, y: py + bg.ux * cs }, 60);
-      const wB = reachTo(P.chest, { x: px + bg.uy * cs, y: py - bg.ux * cs }, 60);
-      h.rollU = wu; h.rollTg = t; h.rollArm = false; h.rollPart = part;   // для отрисовки мотка и наклона корпуса
-      nudge(P.wristF, wF.x, wF.y, 0.5);
-      nudge(P.elbowF, lerp(P.chest.x, wF.x, 0.5) + h.f * 4, lerp(P.chest.y, wF.y, 0.5) + 12, 0.25);
-      nudge(P.wristB, wB.x, wB.y, 0.5);
-      if (wp) {
-        if (ph.soak[part] >= 1) { ph.wrap[part] = 0; ph.soak[part] = 0; }
-        const rate = (h.isMedic ? MEDIC_RATE : 1) * painSlow(Health.state.pain) * painSlow(hs.state.pain);   // боль медика и пациента замедляет бинтование
-        hs.bandage(part, rate);
-        ph.wrap[part] = Math.min(WRAP_T, ph.wrap[part] + rate);
-        if (ph.wrap[part] >= WRAP_T) hs.state.wound[part] = false;
-      }
-      if (h.isMedic) hs.calm();                              // медик понемногу выводит из контузии
-    }
-  }
-  for (let it = 0; it < ITERATIONS; it++) {
-    for (const s of h.sticks) solveStick(s);
-    for (const r of h.ranges) if (h.getup ? r === h.ranges[0] : !(r.ank && Math.max(h.crouch, h.lie) > 0.3)) solveRange(r);
-    if (h.lie < 0.5 && !h.getup) { // лёжа суставы гнутся свободнее
-      bendLimit(P.pelvis, P.kneeB, P.ankleB, h.f);
-      bendLimit(P.pelvis, P.kneeF, P.ankleF, h.f);
-      bendLimit(P.chest, P.elbowB, P.wristB, -h.f);
-      bendLimit(P.chest, P.elbowF, P.wristF, -h.f);
-    }
-    		for (const [, p] of entries) collide(p);
-	}
-  for (const [, p] of entries) {
-    if (p.y < GROUND - p.r - 0.01) continue;
-    if (p.plant) {
-      const d = p.x - p.fx;
-      p.x = Math.abs(d) <= GRIP ? p.fx : p.fx + d - Math.sign(d) * GRIP;
-      p.px = p.x;
-    } else {
-      p.px += (p.x - p.px) * FRICTION;
-    }
-  }
-  if (h.bal > 0.6 && h.lie < 0.5) {
-    h.tip = tipping(P) > TIP_MARGIN ? h.tip + 1 : Math.max(0, h.tip - 2);
-    if (h.tip > 18) { stun = Math.max(stun, 90); h.tip = 0; }
-  } else {
-    h.tip = 0;
-  }
-}
 function update() {
+	refreshUnits();
 	stepHero();
 	updateFormation();
 	for (const a of squad) {
@@ -2508,6 +1140,13 @@ function update() {
 	updateCarry();
 	updateArmor();
 	updateFoes();
+	if (!won && !Health.state.dead) stats.frames++;
+	for (const e of foes) {                                   // каждого убитого врага считаем один раз
+		if (!e.health.state.dead || e.counted) continue;
+		e.counted = true;
+		stats.kills++;
+		if (e.health.state.death && e.health.state.death.by === 'player') stats.mine++;
+	}
 	updateCallouts();
 	updateGrenades();
 	updateShards();
@@ -2585,6 +1224,7 @@ function resetGame() {
   camX = 0;
   genWorld();
   genSquad();
+  stats.frames = stats.kills = stats.mine = stats.shots = stats.hits = stats.nades = 0;
   stun = 0;
   mouseDown = false;
   for (const k in keys) keys[k] = false;
@@ -2662,14 +1302,28 @@ spawnGunners();
 const DT = 1000 / 60;
 let last = performance.now();
 let acc = 0;
+const perf = { show: false, upd: 0, ren: 0 };
+window.addEventListener('keydown', e => { if (e.code === 'F3') { perf.show = !perf.show; e.preventDefault(); } });
 function frame(now) {
-  acc += Math.min(100, now - last);
+  acc += Math.min(50, now - last);                      // не больше 3 обновлений за кадр: при просадке игра замедляется, а не уходит в спираль
   last = now;
+  const t0 = performance.now();
   while (acc >= DT) {
     if (!inMenu) update();
     acc -= DT;
   }
+  const t1 = performance.now();
   render();
+  const t2 = performance.now();
+  perf.upd += ((t1 - t0) - perf.upd) * 0.05;
+  perf.ren += ((t2 - t1) - perf.ren) * 0.05;
+  if (perf.show) {                                      // F3: сколько мс уходит на логику и на отрисовку
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(W - 250, 150, 240, 46);
+    ctx.fillStyle = '#b6e36a'; ctx.font = '12px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('update ' + perf.upd.toFixed(2) + ' мс · render ' + perf.ren.toFixed(2) + ' мс', W - 242, 168);
+    ctx.fillText('врагов ' + foes.length + ' (спят ' + foes.filter(e => e.sleep).length + ') · пуль ' + bullets.length, W - 242, 186);
+  }
   updateNadeHud();
   updateAmmoHud();
   requestAnimationFrame(frame);
