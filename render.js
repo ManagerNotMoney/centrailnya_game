@@ -333,14 +333,14 @@ function drawHands() {
 // где на сегменте лежат раны части part (живые отметки + запомненные под бинтом)
 function bandSpots(part, si) {
   const h = hero, out = [];
-  if (h.wounds) for (const w of h.wounds) if (w.si === si && w.part === part && w.kind !== 'dent') out.push({ t: w.t, o: w.o * w.f });
+  if (h.wounds) for (const w of h.wounds) if (w.si === si && w.part === part && w.kind !== 'dent' && w.kind !== 'embed') out.push({ t: w.t, o: w.o * w.f });
   if (h.dress && h.dress[part]) for (const d of h.dress[part]) if (d.si === si) out.push({ t: d.t, o: d.o });
   return out;
 }
 function partHasSpots(part) {
   const h = hero;
   if (h.dress && h.dress[part] && h.dress[part].length) return true;
-  return !!(h.wounds && h.wounds.some(w => w.part === part && w.kind !== 'dent'));
+  return !!(h.wounds && h.wounds.some(w => w.part === part && w.kind !== 'dent' && w.kind !== 'embed'));
 }
 function drawBand(seg, si) {
   const part = partOfSeg(seg);
@@ -531,6 +531,7 @@ function drawBullets() {
 	ctx.lineWidth = 2;
 	ctx.lineCap = 'round';
 	for (const b of bullets) {
+		ctx.strokeStyle = b.rc ? '#ffffff' : '#ffe4a0';     // отрикошетившая пуля светится белым
 		ctx.lineWidth = b.sn ? 3 : 2;
 		ctx.beginPath();
 		ctx.moveTo(b.px, b.py);
@@ -582,6 +583,38 @@ function drawWounds(si, seg) {
 			ctx.beginPath();
 			ctx.arc(p.x, p.y, w.r + 1.2, 0.3, 3.6);
 			ctx.stroke();
+			continue;
+		}
+		if (w.kind === 'embed') {                                  // крупный осколок торчит из раны
+			const A = hero.p[seg.a], B = hero.p[seg.b];
+			const a = Math.atan2(B.y - A.y, B.x - A.x) + w.ra;
+			const ca = Math.cos(a), sa = Math.sin(a), L = w.sz, Wd = L * 0.35;
+			ctx.globalAlpha = Math.min(1, w.ttl / 60);             // в последнюю секунду исчезает
+			ctx.fillStyle = 'rgba(150,12,12,0.6)';                 // кровь вокруг
+			ctx.beginPath();
+			ctx.arc(p.x, p.y, w.stain, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.fillStyle = '#6b706c';
+			ctx.strokeStyle = '#15180f';
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(p.x, p.y);
+			ctx.lineTo(p.x + ca * L * 0.5 - sa * Wd, p.y + sa * L * 0.5 + ca * Wd);
+			ctx.lineTo(p.x + ca * L, p.y + sa * L);
+			ctx.lineTo(p.x + ca * L * 0.7 + sa * Wd * 0.8, p.y + sa * L * 0.7 - ca * Wd * 0.8);
+			ctx.closePath();
+			ctx.fill();
+			ctx.stroke();
+			ctx.strokeStyle = 'rgba(230,235,225,0.5)';             // блик на металле
+			ctx.beginPath();
+			ctx.moveTo(p.x + ca * L * 0.2, p.y + sa * L * 0.2);
+			ctx.lineTo(p.x + ca * L * 0.85, p.y + sa * L * 0.85);
+			ctx.stroke();
+			ctx.fillStyle = '#1a0605';                             // тёмная точка входа у основания
+			ctx.beginPath();
+			ctx.arc(p.x, p.y, 1.4, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.globalAlpha = 1;
 			continue;
 		}
 		if (w.kind === 'burn' || w.kind === 'bruise') {            // ожог / гематома: без крови
@@ -793,6 +826,25 @@ function drawShards() {
   }
   ctx.lineCap = 'butt';
 }
+function drawBigShards() {
+  ctx.lineWidth = 1;
+  for (const s of bigShards) {
+    if (!onScreen(s.x - 20, 40)) continue;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.a);
+    ctx.fillStyle = s.life > 25 ? '#8a8f8a' : '#4a4d4a';
+    ctx.strokeStyle = '#15180f';
+    ctx.beginPath();
+    ctx.moveTo(-s.sz * 0.5, -s.sz * 0.25);
+    ctx.lineTo(s.sz * 0.6, 0);
+    ctx.lineTo(-s.sz * 0.2, s.sz * 0.35);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
 function drawCraters() {
   ctx.fillStyle = '#232a17';
   for (const c of craters) {
@@ -815,12 +867,14 @@ function drawRockets() {
       ctx.beginPath(); ctx.arc(-20, 0, 90, 0, Math.PI * 2); ctx.fill();
       ctx.scale(2.4, 2.4);
     }
-    ctx.fillStyle = '#ffb340';
-    ctx.beginPath();
-    ctx.moveTo(-16, -3);
-    ctx.lineTo(-45 - Math.random() * 20, 0);
-    ctx.lineTo(-16, 3);
-    ctx.fill();
+    if (!(r.stuck > 0)) {                                 // воткнувшаяся ракета больше не горит
+      ctx.fillStyle = '#ffb340';
+      ctx.beginPath();
+      ctx.moveTo(-16, -3);
+      ctx.lineTo(-45 - Math.random() * 20, 0);
+      ctx.lineTo(-16, 3);
+      ctx.fill();
+    }
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#111';
     ctx.fillStyle = '#6b6f5c';
@@ -1440,6 +1494,19 @@ function drawMinimap() {
   });
   foes.forEach((e, i) => {                                               // враги — красные
     if (e.health.state.dead) return;
+    if (e.gunner) {                                                      // пулемётчик в доме — квадрат с дулом в сторону окна
+      const gx = mx(e.hero.p.pelvis.x), gy = yb + 9;
+      const pulse = e.firing ? 0.6 + 0.4 * Math.sin(Date.now() / 90) : 1;  // стреляет — мигает
+      g.globalAlpha = pulse;
+      g.fillStyle = e.firing ? '#ff7a3a' : '#a85a3a';
+      g.fillRect(gx - 3, gy - 3, 6, 6);
+      g.strokeStyle = '#10130a'; g.lineWidth = 1;
+      g.strokeRect(gx - 3, gy - 3, 6, 6);
+      g.strokeStyle = g.fillStyle; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(gx + e.side * 3, gy); g.lineTo(gx + e.side * 8, gy); g.stroke();
+      g.globalAlpha = 1;
+      return;
+    }
     g.fillStyle = '#e0523f';
     g.beginPath(); g.arc(mx(e.hero.p.pelvis.x), yb + ((i % 3) - 1) * 5, 2.4, 0, Math.PI * 2); g.fill();
   });
@@ -1493,6 +1560,56 @@ function drawGrade() {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 }
+// мелкие позывные над головами живых бойцов отряда
+function drawCallsigns() {
+	ctx.save();
+	ctx.font = '600 10px Consolas, "Courier New", monospace';
+	ctx.textAlign = 'center';
+	for (const a of squad) {
+		if (!a.call || a.health.state.dead) continue;
+		const hd = a.hero.p.head;
+		if (!onScreen(hd.x - 40, 80)) continue;
+		ctx.fillStyle = 'rgba(0,0,0,0.55)';
+		ctx.fillText(a.call, hd.x + 1, hd.y - 29);
+		ctx.fillStyle = a.personal ? '#8fd3ff' : 'rgba(238,242,220,0.75)';
+		ctx.fillText(a.call, hd.x, hd.y - 30);
+	}
+	ctx.restore();
+}
+// радиосообщение над головой игрока: «АЛЬФА — 200», печатается по букве, в начале — помехи
+function drawCallouts() {
+	if (!callouts.length) return;
+	const hd = hero.p.head;
+	ctx.save();
+	ctx.font = '700 20px Consolas, "Courier New", monospace';
+	ctx.textBaseline = 'middle';
+	ctx.textAlign = 'left';
+	if ('letterSpacing' in ctx) ctx.letterSpacing = '2px';
+	let row = 0;
+	for (let i = callouts.length - 1; i >= 0; i--) {
+		const c = callouts[i];
+		if (c.t < 0) continue;                                    // ещё ждёт своей очереди в эфире
+		const shown = Math.min(c.txt.length, Math.floor(c.t / CALL_TYPE) + 1);
+		const fullW = ctx.measureText(c.txt).width;
+		const jit = c.t < 10 ? (Math.random() - 0.5) * 5 : 0;      // помехи в начале передачи
+		const x0 = hd.x - fullW / 2 + jit;
+		const y = hd.y - 66 - row * 34 - c.t * 0.04;               // медленно уплывает вверх
+		ctx.globalAlpha = Math.max(0, Math.min(1, (CALL_LIFE - c.t) / 40, c.t / 6 + 0.2));
+		ctx.fillStyle = 'rgba(12,14,8,0.72)';
+		ctx.fillRect(x0 - 12, y - 16, fullW + 24, 32);
+		ctx.fillStyle = '#e0523f';
+		ctx.fillRect(x0 - 12, y - 16, 3, 32);
+		ctx.fillStyle = '#eef2dc';
+		ctx.fillText(c.txt.slice(0, Math.min(shown, c.name.length)), x0, y + 1);
+		if (shown > c.name.length) {                               // «— 200» красным
+			ctx.fillStyle = '#ff4a3a';
+			ctx.fillText(c.txt.slice(c.name.length, shown), x0 + ctx.measureText(c.name).width, y + 1);
+		}
+		row++;
+	}
+	if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+	ctx.restore();
+}
 function render() {
   drawSky();
   drawBackdrop();
@@ -1540,6 +1657,7 @@ function render() {
 	drawGrenades();
 	drawNadeAim();
 	drawShards();
+	drawBigShards();
 	drawBullets();
 	drawStrafe();
 	drawBlood();
@@ -1548,6 +1666,8 @@ function render() {
 	drawRockets();
 	drawMegaFx();
 	drawDust();
+	drawCallsigns();
+	drawCallouts();
   ctx.restore();
   drawGrade();
   if (megaFlash > 0) { ctx.fillStyle = 'rgba(255,250,235,' + megaFlash.toFixed(3) + ')'; ctx.fillRect(0, 0, W, H); }

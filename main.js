@@ -173,9 +173,9 @@ function collide(p) {
   if (p.x < p.r) p.x = p.r;
   if (p.x > WORLD_W - p.r) p.x = WORLD_W - p.r;
 }
-function explode(x, y, R = 260, power = 1) {
+function explode(x, y, R = 260, power = 1, shardMul = 1) {
   runAll(() => blast(x, y, R, power));
-  boom(x, y, power);
+  boom(x, y, power, shardMul);
 }
 function blast(x, y, R, power) {
   let hit = 0;
@@ -194,13 +194,16 @@ function blast(x, y, R, power) {
     }
   }
   if (hit > 0.2) stun = Math.max(stun, Math.round(40 + hit * 80));
+  if (hit > 0.2 && hero.isPlayer) deafen(2 + Math.min(1, hit * Math.sqrt(power)));   // 2–3 с тишины, потом звук возвращается
   const wasDead = Health.state.dead;
   Health.onBlast(hits);
   if ((Health.state.dead || Health.state.parts.torso <= 0) && hit > DISMEMBER_K) dismember(hero, hits, x, power, wasDead);   // погиб или торс разрушен взрывом — отлетают конечности
 }
-function boom(x, y, power) {
+function boom(x, y, power, shardMul = 1) {
   effects.push({ x, y, t: 0, s: power });
-  spawnShards(x, y, Math.round(SHARD_COUNT * power));
+  explosionSound(x, power);
+  spawnShards(x, y, Math.round(SHARD_COUNT * power * shardMul));
+  spawnBigShards(x, y, Math.min(14, Math.round(BIG_SHARD_COUNT * power * shardMul)));
   if (y > GROUND - 40) spawnDust(x, power);
   if (power > 1.2) craters.push({ x, s: 40 * power });
   if (craters.length > 8) craters.shift();
@@ -210,10 +213,22 @@ const FUSE = 180;
 const SHARD_COUNT = 36;
 const grenades = [];
 const shards = [];
+const bigShards = [];                    // крупные осколки (летят после взрыва, застревают в телах)
+const BIG_SHARD_COUNT = 15;               // базовое число крупных осколков на взрыв (× power)
+const BIG_SHARD_DMG = 2;                 // урон по здоровью относительно обычного осколка
+const EMBED_TTL = 55 * 60;               // сколько кадров осколок торчит в теле (55 с)
 const bullets = [];
 const flashes = [];
 const BULLET_SPEED = 34;
 const SHOOT_CD = 8;
+const RICOCHET_ANGLE = 25 * Math.PI / 180;   // угол к поверхности, меньше которого пуля рикошетит
+const RICOCHET_MAX = 2;                       // сколько рикошетов выдерживает одна пуля
+const RICOCHET_DMG = 0.5;                     // урон после рикошета (множитель)
+const PEN_DMG = 0.6;                          // урон после пробития тела (множитель)
+const PEN_MAX = 2;                            // сколько тел может пробить одна пуля
+const HELMET_DMG = 0.2;                       // урон по каске при рикошете (множитель)
+const HEAR_RANGE = 1400;                      // слышимость звона каски, px
+const HEAR_T = 240;                           // сколько кадров боец помнит, откуда стреляли (4 с)
 // ===== Патроны, перезарядка и отсоединяемый магазин (у всех бойцов) =====
 const MAG_SIZE = 30;         // патронов в магазине АК
 const SNIPER_MAG = 10;       // патронов у снайпера
@@ -451,6 +466,53 @@ function updateShards() {
     if (dead) shards.splice(i, 1);
   }
 }
+function spawnBigShards(x, y, count) {
+  const onGround = y > GROUND - 40;
+  for (let i = 0; i < count; i++) {
+    const ang = onGround ? -Math.random() * Math.PI : Math.random() * Math.PI * 2;
+    const sp = 8 + Math.random() * 9;
+    bigShards.push({
+      x, y: y - 4, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      a: Math.random() * Math.PI * 2, va: (Math.random() - 0.5) * 0.5,
+      sz: 6 + Math.random() * 5, life: 80 + Math.random() * 50
+    });
+  }
+}
+function updateBigShards() {
+  for (let i = bigShards.length - 1; i >= 0; i--) {
+    const s = bigShards[i];
+    let dead = --s.life <= 0;
+    s.vy += 0.3;
+    s.vx *= 0.992;
+    s.a += s.va;
+    for (let k = 0; k < 2 && !dead; k++) {
+      s.x += s.vx / 2;
+      s.y += s.vy / 2;
+      if (s.y >= GROUND || s.x < 0 || s.x > WORLD_W || shardBlocked(s.x, s.y)) { dead = true; break; }
+      for (const u of everybody()) {
+        const h = u.hero;
+        if (Math.abs(s.x - h.p.pelvis.x) > 170) continue;
+        for (const seg of h.segs) {
+          if (distToSeg(s.x, s.y, h.p[seg.a], h.p[seg.b]) < seg.ry * 0.8 + 3) {
+            s.pass = s.pass || new Map();
+            if (!s.pass.has(h)) s.pass.set(h, Math.random() < h.lie * 0.6);
+            if (s.pass.get(h)) continue;
+            for (const n of [seg.a, seg.b]) {
+              h.p[n].px -= s.vx * 0.25;
+              h.p[n].py -= s.vy * 0.25;
+            }
+            u.health.onShrapnel(seg.b, BIG_SHARD_DMG);
+            addWound(u, seg, s.x, s.y, 'embed', s.vx, s.vy);
+            dead = true;
+            break;
+          }
+        }
+        if (dead) break;
+      }
+    }
+    if (dead) bigShards.splice(i, 1);
+  }
+}
 function shootUnit(h) {
 	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5 || h.bandaging || h.carrying || h.nadeAim || h.throwT > 0) return;
 	if (h.ammo <= 0 || h.reloadT > 0 || h.magOut) return;
@@ -463,41 +525,176 @@ function shootUnit(h) {
 	const my = h.p.chest.y + ay * reach;
 	const sa = h.aimA + (Math.random() - 0.5) * 2 * (h.spread || 0);   // разброс у ботов
 	const spd = sn ? SNIPER_SPEED : BULLET_SPEED;
-	bullets.push({ x: mx, y: my, px: mx, py: my, vx: Math.cos(sa) * spd, vy: Math.sin(sa) * spd, life: sn ? 70 : 90, foe: !!h.foe, sn, dmg: sn ? SNIPER_DMG : 2.5 });
+	bullets.push({ x: mx, y: my, px: mx, py: my, vx: Math.cos(sa) * spd, vy: Math.sin(sa) * spd, life: sn ? 70 : 90, foe: !!h.foe, sn, dmg: sn ? SNIPER_DMG : 2.5, sx: mx });
 	flashes.push({ x: mx, y: my, a: h.aimA, life: 7, max: 7 });
 	// отдача: толкаем корпус и таз назад
 	const rec = sn ? 3 : 1;
 	h.p.chest.px -= ax * 1.6 * rec; h.p.chest.py -= ay * 1.6 * rec;
 	h.p.pelvis.px -= ax * 0.5 * rec; h.p.pelvis.py -= ay * 0.5 * rec;
 }
+// твёрдый объект в точке (x, y) или null (то же, что shardBlocked, но возвращает сам объект)
+function solidAt(x, y) {
+	for (const c of props) {
+		if (c.deco || !(x > c.x && x < c.x + c.w && y > GROUND - c.h)) continue;
+		if (c.type === 'house') { if (houseBlocks(c, x, y)) return c; continue; }
+		return c;
+	}
+	return null;
+}
+// отражает скорость пули от поверхности с нормалью (nx, ny): потеря скорости keep, случайный разброс ±11°
+function bounceBullet(b, nx, ny, keep) {
+	const dot = b.vx * nx + b.vy * ny;
+	const vx = b.vx - 2 * dot * nx, vy = b.vy - 2 * dot * ny;
+	const m = keep * (0.85 + Math.random() * 0.3);
+	const da = (Math.random() - 0.5) * 0.4;
+	const c = Math.cos(da), s = Math.sin(da);
+	let rx = (vx * c - vy * s) * m, ry = (vx * s + vy * c) * m;
+	const d2 = rx * nx + ry * ny;
+	if (d2 < 0) { rx -= 2 * d2 * nx; ry -= 2 * d2 * ny; }      // после разброса не уходим обратно в поверхность
+	b.vx = rx; b.vy = ry;
+	b.rc = (b.rc || 0) + 1;
+	b.dmg = (b.dmg || 2.5) * RICOCHET_DMG;
+}
+function sparkBurst(x, y, n) {
+	for (let i = 0; i < n; i++) dust.push({ x, y, vx: (Math.random() - 0.5) * 8, vy: -Math.random() * 5, r: 1.6, grow: 0, life: 10, max: 10, a: 0.9, c: '255,225,130' });
+}
+// пуля b вошла в твёрдый объект c (ox, oy — последняя свободная точка). true — срикошетила, false — остановлена
+function tryRicochet(b, c, ox, oy) {
+	if (c.type !== 'barrier' && c.type !== 'house') {          // мешки с песком и окоп глотают пулю
+		for (let i = 0; i < 3; i++) dust.push({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2, r: 3, grow: 0.3, life: 20, max: 20, a: 0.5, c: '140,120,80' });
+		return false;
+	}
+	if ((b.rc || 0) >= RICOCHET_MAX) return false;
+	const spd = Math.hypot(b.vx, b.vy) || 1;
+	const hx = !!solidAt(b.x, oy), hy = !!solidAt(ox, b.y);    // какой сдвиг упирается в поверхность — такая и грань
+	let nx = 0, ny = 0;
+	if (hx && !hy) nx = -Math.sign(b.vx);
+	else if (hy && !hx) ny = -Math.sign(b.vy);
+	else if (Math.abs(b.vx) > Math.abs(b.vy)) nx = -Math.sign(b.vx);
+	else ny = -Math.sign(b.vy);
+	if (!nx && !ny) return false;
+	const dot = b.vx * nx + b.vy * ny;
+	if (Math.abs(dot) / spd >= Math.sin(RICOCHET_ANGLE)) return false;   // слишком крутой угол — пуля застревает
+	b.x = ox; b.y = oy;
+	bounceBullet(b, nx, ny, 0.6);
+	sparkBurst(ox, oy, 6);
+	return true;
+}
+function pingSound(x) {                                        // «дзынь»: чем ближе к игроку, тем громче
+	try {
+		const ac = sndCtx();
+		const vol = 0.18 + 0.32 * Math.max(0, 1 - Math.abs(x - hero.p.pelvis.x) / 1600);
+		const now = ac.currentTime;
+		const g = ac.createGain();
+		g.gain.setValueAtTime(vol, now);
+		g.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+		g.connect(Snd.out);
+		for (const f of [1900, 2870, 4350]) {                    // несколько негармоничных тонов — металл
+			const o = ac.createOscillator();
+			o.type = 'triangle';
+			o.frequency.setValueAtTime(f * (0.97 + Math.random() * 0.06), now);
+			o.connect(g);
+			o.start(now); o.stop(now + 0.45);
+		}
+	} catch (e) { /* звук необязателен */ }
+}
+// звон услышали бойцы противоположной стороны: запоминают, откуда стреляли
+function alertListeners(b) {
+	for (const a of (b.foe ? squad : foes)) {
+		if (a.health.state.dead || Math.abs(a.hero.p.pelvis.x - b.x) > HEAR_RANGE) continue;
+		a.heardX = b.sx;
+		a.heardT = HEAR_T;
+	}
+}
+// попадание пули b в сегмент seg бойца u: 0 — пуля остановлена, 1 — прошла насквозь, 2 — срикошетила от каски
+function bulletHitUnit(b, u, seg) {
+	const h = u.hero, hs = u.health.state;
+	const part = partOfSeg(seg);
+	const dmg = b.dmg || 2.5;
+	const armored = (part === 'head' && hs.helmet > 0) || (part === 'torso' && hs.armor > 0);
+	if (seg.b === 'head' && hs.helmet > 0) {                   // касательное попадание в каску
+		const c = h.p.head;
+		let nx = b.x - c.x, ny = b.y - c.y;
+		const nl = Math.hypot(nx, ny);
+		if (nl > 1) {
+			nx /= nl; ny /= nl;
+			const dot = (b.vx * nx + b.vy * ny) / (Math.hypot(b.vx, b.vy) || 1);
+			if (dot < 0 && -dot < Math.sin(RICOCHET_ANGLE)) {
+				u.health.onShrapnel(seg.b, dmg * HELMET_DMG);
+				addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
+				bounceBullet(b, nx, ny, 0.6);
+				(b.hit = b.hit || new Set()).add(h);
+				sparkBurst(b.x, b.y, 8);
+				pingSound(b.x);
+				alertListeners(b);
+				return 2;
+			}
+		}
+	}
+	for (const n of [seg.a, seg.b]) { h.p[n].px -= b.vx * 0.06; h.p[n].py -= b.vy * 0.06; }
+	u.health.onShrapnel(seg.b, dmg);                           // винтовочная пуля: ×2.5 от осколка
+	addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
+	if (armored || (b.pen || 0) >= PEN_MAX) return 0;          // броня и каска пулю останавливают
+	b.pen = (b.pen || 0) + 1;                                  // мягкое тело: пуля летит дальше с ×0.6 урона
+	b.dmg = dmg * PEN_DMG;
+	b.vx *= 0.92; b.vy *= 0.92;
+	(b.hit = b.hit || new Set()).add(h);
+	return 1;
+}
+const WHIZZ_R = 90;      // на каком расстоянии от головы игрока пуля «свистит»
+let whizzCD = 0;         // пауза между свистами, кадров
+// пуля b уже миновала голову игрока и не попала: если прошла близко — свист и дёрг
+function whizzCheck(b) {
+	if (b.wz || Health.state.dead) return;
+	const hd = hero.p.head;
+	const behind = (hd.x - b.x) * b.vx + (hd.y - b.y) * b.vy < 0;     // голова осталась позади пули
+	if (!behind) { b.ap = true; return; }                              // ещё летит к игроку
+	b.wz = true;
+	if (!b.ap || whizzCD > 0) return;                                  // вылетела уже позади игрока — не считаем
+	const d = distToSeg(hd.x, hd.y, { x: b.px, y: b.py }, b);
+	if (d > WHIZZ_R) return;
+	whizzCD = 5;
+	const near = 1 - d / WHIZZ_R;
+	whizzSound(near);
+	hitReact(hero, 'head', b.vx, b.vy, 0.12 + 0.3 * near);             // чуть дёрнулся
+	shake = Math.max(shake, 0.6 + 1.2 * near);
+}
 function updateBullets() {
+	if (whizzCD > 0) whizzCD--;
 	for (let i = bullets.length - 1; i >= 0; i--) {
 		const b = bullets[i];
 		b.px = b.x; b.py = b.y;
 		let dead = false;
-		const targets = b.foe ? everyone() : foes;       // пуля врага бьёт по нашим, наша — по врагам
+		const targets = b.rc ? everybody() : (b.foe ? everyone() : foes);   // пуля врага бьёт по нашим, наша — по врагам; отрикошетившая — по всем
 		const steps = Math.ceil(Math.hypot(b.vx, b.vy) / 11.5);
 		for (let k = 0; k < steps; k++) {
+			const ox = b.x, oy = b.y;
 			b.x += b.vx / steps;
 			b.y += b.vy / steps;
-			if (b.y >= GROUND || b.x < 0 || b.x > WORLD_W || shardBlocked(b.x, b.y)) { dead = true; break; }
+			if (b.y >= GROUND || b.x < 0 || b.x > WORLD_W) { dead = true; break; }
+			const sc = solidAt(b.x, b.y);
+			if (sc) {                                          // твёрдая поверхность: рикошет или остановка
+				if (!tryRicochet(b, sc, ox, oy)) dead = true;
+				break;
+			}
+			let bounced = false;
 			for (const u of targets) {
 				if (u.health.state.dead) continue;
 				const h = u.hero;
+				if (b.hit && b.hit.has(h)) continue;           // этого бойца пуля уже прошила / задела
 				if (Math.abs(b.x - h.p.pelvis.x) > 170) continue;
 				for (const seg of h.segs) {
 					if (distToSeg(b.x, b.y, h.p[seg.a], h.p[seg.b]) < seg.ry * 0.8 + 2) {
-						for (const n of [seg.a, seg.b]) { h.p[n].px -= b.vx * 0.06; h.p[n].py -= b.vy * 0.06; }
-						u.health.onShrapnel(seg.b, b.dmg || 2.5);                      // винтовочная пуля: ×2.5 от осколка
-						addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
-						dead = true;
+						const r = bulletHitUnit(b, u, seg);
+						if (r === 0) dead = true; else if (r === 2) bounced = true;
 						break;
 					}
 				}
-				if (dead) break;
+				if (dead || bounced) break;
 			}
-			if (dead) break;
+			if (dead || bounced) break;
 		}
+		if (!dead && (b.foe || b.rc)) whizzCheck(b);      // вражеская или отрикошетившая пуля прошла мимо — свист
 		if (dead || --b.life <= 0) bullets.splice(i, 1);
 	}
 	for (let i = flashes.length - 1; i >= 0; i--) {
@@ -509,6 +706,10 @@ const nextRocket = () => Math.round(ROCKET_MIN + Math.random() * (ROCKET_MAX - R
 const ROCKET_SPEED = 40;
 const ROCKET_R = 380;
 const ROCKET_POWER = 1.7;
+const ROCKET_DUD_CHANCE = 0.25;   // шанс, что ракета воткнётся в землю и взорвётся с задержкой
+const ROCKET_DUD_MIN = 60;        // задержка взрыва, кадров (1 с)
+const ROCKET_DUD_MAX = 180;       // (3 с)
+const DUD_SHARD_MUL = 1.25;       // осколков на 25% больше при таком взрыве
 const DIRT = ['#4a3b27', '#3a2f1f', '#5a4a30', '#2a301b'];
 const rockets = [];
 const ROCKET_SPREAD = 1300;
@@ -615,9 +816,78 @@ function launchMega() {
   const frames = (GROUND + 60) / MEGA_SPEED;
   rockets.push({ x: tx - vx * frames, y: -60, vx, vy: MEGA_SPEED, mega: true, R: MEGA_R, pw: MEGA_POWER });
 }
+// ===== Общий звук: один контекст и общий регулятор громкости, через него оглушение глушит всё =====
+const Snd = { ac: null, out: null, lp: null, deafEnd: 0 };
+const DEAF_RECOVER = 3;       // сек: за это время звук возвращается после оглушения
+function sndCtx() {
+	if (!Snd.ac) {
+		const ac = Snd.ac = new (window.AudioContext || window.webkitAudioContext)();
+		Snd.lp = ac.createBiquadFilter(); Snd.lp.type = 'lowpass'; Snd.lp.frequency.value = 20000;
+		Snd.out = ac.createGain();
+		Snd.out.connect(Snd.lp); Snd.lp.connect(ac.destination);
+	}
+	if (Snd.ac.state === 'suspended') Snd.ac.resume();
+	return Snd.ac;
+}
+// оглушение на sec секунд: звук почти пропадает и глохнет верх, потом плавно возвращается
+function deafen(sec) {
+	try {
+		const a = sndCtx(), now = a.currentTime, end = now + sec;
+		if (end <= Snd.deafEnd) return;                    // уже оглушён дольше
+		Snd.deafEnd = end;
+		const g = Snd.out.gain, f = Snd.lp.frequency;
+		g.cancelScheduledValues(now); g.setValueAtTime(Math.max(0.03, g.value), now);
+		g.linearRampToValueAtTime(0.03, now + 0.12);       // хлопок ещё слышен, потом тишина
+		g.setValueAtTime(0.03, end);
+		g.exponentialRampToValueAtTime(1, end + DEAF_RECOVER);
+		f.cancelScheduledValues(now); f.setValueAtTime(Math.max(300, f.value), now);
+		f.exponentialRampToValueAtTime(300, now + 0.12);
+		f.setValueAtTime(300, end);
+		f.exponentialRampToValueAtTime(20000, end + DEAF_RECOVER);
+	} catch (e) { /* звук необязателен */ }
+}
+// свист пули: шум в полосе, тон падает при пролёте; near 0..1 — насколько близко прошла
+function whizzSound(near) {
+	try {
+		const a = sndCtx(), now = a.currentTime;
+		const len = 0.16 + 0.1 * (1 - near);
+		const n = Math.floor(a.sampleRate * len);
+		const buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
+		for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 1.5);
+		const src = a.createBufferSource(); src.buffer = buf;
+		const bp = a.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 3;
+		bp.frequency.setValueAtTime(3800 + near * 1500, now);
+		bp.frequency.exponentialRampToValueAtTime(1100, now + len);
+		const g = a.createGain();
+		g.gain.setValueAtTime(0.12 + 0.4 * near, now);
+		g.gain.exponentialRampToValueAtTime(0.0001, now + len);
+		src.connect(bp); bp.connect(g); g.connect(Snd.out);
+		src.start(now);
+	} catch (e) { /* звук необязателен */ }
+}
+// обычный взрыв: чем дальше от игрока, тем тише
+function explosionSound(x, power) {
+	try {
+		const a = sndCtx(), now = a.currentTime;
+		const vol = 0.55 * Math.min(1.5, power) * Math.max(0.08, 1 - Math.abs(x - hero.p.pelvis.x) / 2200);
+		const n = Math.floor(a.sampleRate * 1.2);
+		const buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
+		for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
+		const noise = a.createBufferSource(); noise.buffer = buf;
+		const lp = a.createBiquadFilter(); lp.type = 'lowpass';
+		lp.frequency.setValueAtTime(2500, now); lp.frequency.exponentialRampToValueAtTime(250, now + 0.8);
+		const g = a.createGain(); g.gain.value = vol;
+		noise.connect(lp); lp.connect(g); g.connect(Snd.out); noise.start(now);
+		const o = a.createOscillator(), og = a.createGain();
+		o.type = 'sine';
+		o.frequency.setValueAtTime(110, now); o.frequency.exponentialRampToValueAtTime(35, now + 0.5);
+		og.gain.setValueAtTime(vol * 1.1, now); og.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+		o.connect(og); og.connect(Snd.out); o.start(now); o.stop(now + 0.7);
+	} catch (e) { /* звук необязателен */ }
+}
 function megaSound() {
   try {
-    const ac = megaSound.ac = megaSound.ac || new (window.AudioContext || window.webkitAudioContext)();
+    const ac = sndCtx();
     const now = ac.currentTime;
     const len = Math.floor(ac.sampleRate * 3);
     const buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
@@ -625,11 +895,11 @@ function megaSound() {
     const noise = ac.createBufferSource(); noise.buffer = buf;
     const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 400;
     const g = ac.createGain(); g.gain.value = 0.5;
-    noise.connect(lp); lp.connect(g); g.connect(ac.destination); noise.start(now);
+    noise.connect(lp); lp.connect(g); g.connect(Snd.out); noise.start(now);
     const o = ac.createOscillator(), og = ac.createGain();
     o.type = 'sine'; o.frequency.setValueAtTime(90, now); o.frequency.exponentialRampToValueAtTime(25, now + 2);
     og.gain.setValueAtTime(0.6, now); og.gain.exponentialRampToValueAtTime(0.0001, now + 2.5);
-    o.connect(og); og.connect(ac.destination); o.start(now); o.stop(now + 2.5);
+    o.connect(og); og.connect(Snd.out); o.start(now); o.stop(now + 2.5);
   } catch (e) { /* звук необязателен */ }
 }
 function megaBoom(x) {
@@ -675,6 +945,14 @@ function updateRockets() {
   }
   for (let i = rockets.length - 1; i >= 0; i--) {
     const r = rockets[i];
+    if (r.stuck > 0) {                                       // ракета торчит в земле и ждёт взрыва
+      if (Math.random() < 0.35) dust.push({ x: r.x + (Math.random() - 0.5) * 6, y: r.y - 6, vx: (Math.random() - 0.5) * 0.6, vy: -(0.6 + Math.random() * 1.2), r: 3, grow: 0.2, life: 50, max: 50, a: 0.35, c: '120,120,120' });
+      if (--r.stuck <= 0) {
+        rockets.splice(i, 1);
+        explode(r.x, GROUND - 10, r.R || ROCKET_R, r.pw || ROCKET_POWER, DUD_SHARD_MUL);
+      }
+      continue;
+    }
     r.x += r.vx;
     r.y += r.vy;
     // дымный след
@@ -690,6 +968,12 @@ function updateRockets() {
       continue;
     }
     if (r.y >= GROUND - 4) {
+      if (!r.mega && Math.random() < ROCKET_DUD_CHANCE) {    // воткнулась в землю, взорвётся через 1–3 с
+        r.stuck = ROCKET_DUD_MIN + Math.round(Math.random() * (ROCKET_DUD_MAX - ROCKET_DUD_MIN));
+        r.y = GROUND - 6;
+        spawnDust(r.x, 0.4);
+        continue;
+      }
       rockets.splice(i, 1);
       explode(r.x, GROUND - 10, r.R || ROCKET_R, r.pw || ROCKET_POWER);
       if (r.mega) megaBoom(r.x);
@@ -771,6 +1055,7 @@ function updateStrafe() {
         if (dead) break;
       }
     }
+    if (!dead) whizzCheck(b);
     if (dead || b.y > H + 200) strafeShots.splice(i, 1);
   }
 }
@@ -866,7 +1151,13 @@ function addWound(u, seg, x, y, kind, vx, vy) {
   let k = kind;                                                           // разнообразие ран
   if (kind === 'frag') { const r = Math.random(); k = r < 0.55 ? 'frag' : r < 0.85 ? 'slash' : 'burn'; }   // осколок: дыра, порез или ожог от горячего металла
   else if (kind === 'bullet' && Math.abs(o) > 0.42) k = 'graze';          // по касательной — царапина
-  pushWound(h, { part: partOfSeg(seg), si, t, o: Math.max(-0.85, Math.min(0.85, o)), kind: k });
+  const wd = { part: partOfSeg(seg), si, t, o: Math.max(-0.85, Math.min(0.85, o)), kind: k };
+  if (kind === 'embed') {                                                 // крупный осколок застрял в теле
+    wd.ttl = EMBED_TTL;
+    wd.sz = 8 + Math.random() * 5;
+    wd.ra = Math.atan2(-(vy || 0), -(vx || 1)) - Math.atan2(dy, dx);      // торчит назад по траектории, угол относительно кости
+  }
+  pushWound(h, wd);
   hitReact(h, partOfSeg(seg), vx || 0, vy || 0, k === 'graze' ? 0.4 : kind === 'frag' ? 0.7 : 1);
   spawnBlood(x, y, k === 'burn' ? 0 : k === 'graze' ? 2 : kind === 'frag' ? 7 : 5, -(vx || 0) * 0.1, -2, 5);   // брызги
 }
@@ -1024,6 +1315,11 @@ function updateWounds() {
   for (let i = ws.length - 1; i >= 0; i--) {
     const w = ws[i];
     if (w.kind === 'dent') { if ((w.part === 'torso' ? st.armor : st.helmet) <= 0) ws.splice(i, 1); continue; }   // вмятины живут, пока есть каска / жилет
+    if (w.kind === 'embed') {                              // осколок торчит 55 с, перевязка его не убирает
+      if (--w.ttl <= 0) { ws.splice(i, 1); continue; }
+      if (bleeding && st.wound[w.part]) w.stain = Math.min(w.maxStain, w.stain + 0.006 * st.bleed);
+      continue;
+    }
     if (!st.wound[w.part]) {                               // перевязано — рана уходит под бинт на том же месте
       if (h.wrap[w.part] > 0) {
         const dr = h.dress || (h.dress = {});
@@ -1094,9 +1390,12 @@ function genWorld() {
     else p = { type: 'wire', w: 120 + rnd() * 110, h: 34, deco: true };
     p.x = x;
     p.s = rnd() * 1000;
+    if (p.type === 'house') p.mg = Math.random() < MG_CHANCE;   // в доме сидит пулемётчик
     props.push(p);
     x += p.w + 220 + rnd() * 420;
   }
+  const houses = props.filter(p => p.type === 'house');                                  // хотя бы в одном доме — пулемётчик
+  if (houses.length && !houses.some(p => p.mg)) houses[Math.floor(Math.random() * houses.length)].mg = true;
 }
 function updateCamera() {
   const target = hero.p.pelvis.x - W * 0.4;
@@ -1173,6 +1472,55 @@ function tintUnit(h, i) {
     else if (s.c === COLORS.shirtDark) s.c = dark;
   }
 }
+// ===== Позывные и радиосообщения о гибели =====
+const CALLSIGNS = ['Альфа', 'Браво', 'Чарли', 'Дельта', 'Эхо', 'Фокстрот', 'Гольф', 'Отель', 'Леший', 'Гризли', 'Тень', 'Север', 'Рысь', 'Гром', 'Бес', 'Шмель', 'Кедр', 'Байкал'];
+const CALLSIGNS_SNIPER = ['Ворон', 'Сокол', 'Гриф', 'Кречет', 'Глаз'];
+const CALLSIGNS_MEDIC = ['Айболит', 'Пилюля', 'Склиф', 'Бинт', 'Таблетка'];
+const callouts = [];       // радиосообщения над головой игрока
+const CALL_TYPE = 3;       // кадров на одну напечатанную букву
+const CALL_LIFE = 260;     // сколько кадров живёт сообщение
+const CALL_GAP = 25;       // пауза между сообщениями, если погибли сразу несколько
+function assignCallsigns() {                                 // уникальный позывной каждому, по роли
+	const gen = CALLSIGNS.slice(), sn = CALLSIGNS_SNIPER.slice(), md = CALLSIGNS_MEDIC.slice();
+	for (const a of squad) {
+		let pool = (a.personal || a.isMedic) ? md : a.sniper ? sn : gen;
+		if (!pool.length) pool = gen;
+		a.call = a.hero.call = pool.splice((Math.random() * pool.length) | 0, 1)[0];
+	}
+}
+function radioSound() {                                      // шипение рации и «пик» конца передачи
+	try {
+		const a = sndCtx(), now = a.currentTime;
+		const n = Math.floor(a.sampleRate * 0.14);
+		const buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
+		for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (i < n * 0.15 ? 1 : Math.pow(1 - i / n, 2));
+		const src = a.createBufferSource(); src.buffer = buf;
+		const bp = a.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.8;
+		const g = a.createGain(); g.gain.value = 0.18;
+		src.connect(bp); bp.connect(g); g.connect(Snd.out); src.start(now);
+		const o = a.createOscillator(), og = a.createGain();
+		o.type = 'square'; o.frequency.setValueAtTime(1000, now + 0.12);
+		og.gain.setValueAtTime(0.0001, now + 0.12);
+		og.gain.exponentialRampToValueAtTime(0.05, now + 0.13);
+		og.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+		o.connect(og); og.connect(Snd.out); o.start(now + 0.12); o.stop(now + 0.25);
+	} catch (e) { /* звук необязателен */ }
+}
+function updateCallouts() {
+	let n = 0;
+	for (const a of squad) {                                 // боец погиб — ставим сообщение в очередь
+		if (a.announced || !a.health.state.dead) continue;
+		a.announced = true;
+		const name = a.call.toUpperCase();
+		callouts.push({ name, txt: name + ' — 200', t: -1 - n++ * CALL_GAP });
+		if (callouts.length > 4) callouts.shift();
+	}
+	for (let i = callouts.length - 1; i >= 0; i--) {
+		const c = callouts[i];
+		if (++c.t === 0) radioSound();                       // передача началась
+		if (c.t > CALL_LIFE) callouts.splice(i, 1);
+	}
+}
 function genSquad() {
   squad.length = 0;
   const n = 4 + Math.floor(Math.random() * 5);
@@ -1210,6 +1558,7 @@ function genSquad() {
     lieT: 1e9, lieFor: 0, medic: null,          // не ложится «отдыхать» сам
     stopX: FINISH_X, isMedic: 'personal', personal: true
   });
+  assignCallsigns();
 }
 function withUnit(u, fn) {
   const sh = hero, sH = Health;
@@ -1465,6 +1814,66 @@ function tintFoe(h, i) {
   for (const s of h.segs) if (map[s.c]) s.c = map[s.c];
   h.helmetC = '#3a3f47';
 }
+// ===== Пулемётчик в доме: сидит у окна, 14 с непрерывно стреляет «в белый свет», 4 с отдыхает =====
+const MG_CHANCE = 0.75;          // шанс, что в доме сидит пулемётчик
+const MG_FIRE_T = 14 * 60;      // кадров огня
+const MG_REST_T = 4 * 60;       // кадров отдыха
+const MG_CD = 5;                // кадров между выстрелами (12 в секунду)
+const MG_SPREAD = 0.14;         // разброс каждой пули, рад
+const MG_BIAS = 0.22;           // медленно «плывущий» перекос прицела, рад
+function spawnGunners() {
+	for (const c of props) {
+		if (c.type !== 'house' || !c.mg) continue;
+		const side = -1;                                              // только левое окно: стреляет влево, в сторону игрока
+		const x = side < 0 ? c.x + HOUSE_WALL + 30 : c.x + c.w - HOUSE_WALL - 30;
+		spawnFoe(x, foes.length);
+		const e = foes[foes.length - 1];
+		e.hero.ammo = 1e9;                                            // ленту не кончить
+		Object.assign(e, {
+			gunner: true, house: c, side,
+			wx: side < 0 ? c.x + HOUSE_WALL / 2 : c.x + c.w - HOUSE_WALL / 2,   // середина стены в окне
+			wy: GROUND - (HOUSE_WIN_LO + HOUSE_WIN_HI) / 2,
+			mgT: Math.random() * (MG_FIRE_T + MG_REST_T), mgPh: Math.random() * Math.PI * 2, firing: false
+		});
+	}
+}
+function gunnerThink(e) {
+	const k = e.keys, h = e.hero, st = e.health.state;
+	k.KeyA = k.KeyD = k.KeyR = k.ShiftLeft = false;
+	k.KeyS = true;                                                    // сидит и не двигается
+	h.treat = null;
+	combatThink(e);                                                   // инициализация бойца; цель и оружие ниже переопределяем
+	if (st.dead) return;
+	e.mgT++;
+	e.firing = e.mgT % (MG_FIRE_T + MG_REST_T) < MG_FIRE_T;          // 14 с огня, 4 с отдыха
+	let best = null, bd = FIRE_RANGE;
+	for (const u of everyone()) {                                     // цель — только по ту сторону дома, где его окно
+		if (!canTarget(u)) continue;
+		const tx = u.hero.p.chest.x, d = Math.abs(tx - e.wx);
+		if ((tx - e.wx) * e.side <= 0 || d >= bd) continue;
+		bd = d; best = u;
+	}
+	e.tgt = best;
+	h.gunWant = e.firing;
+	h.gunRestore = false;
+	if (e.firing) {
+		const c = h.p.chest;
+		h.aimWant = best ? Math.atan2(best.hero.p.chest.y - c.y, best.hero.p.chest.x - c.x) : (e.side > 0 ? 0 : Math.PI);
+	} else h.aimWant = e.side > 0 ? 0 : Math.PI;                      // в отдыхе оружие опущено, но смотрит в сторону окна
+}
+function gunnerShoot(e) {
+	const h = e.hero, st = e.health.state;
+	if (won || st.dead || st.ko > 0 || e.stun > 0 || !e.firing || !e.tgt) return;
+	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5) return;
+	const t = e.tgt.hero.p.chest;
+	const a = Math.atan2(t.y - e.wy, t.x - e.wx)
+		+ Math.sin(e.mgT * 0.02 + e.mgPh) * MG_BIAS                   // прицел медленно «плывёт»
+		+ (Math.random() - 0.5) * 2 * MG_SPREAD;                      // плюс разброс на каждую пулю
+	bullets.push({ x: e.wx, y: e.wy, px: e.wx, py: e.wy, vx: Math.cos(a) * 60, vy: Math.sin(a) * BULLET_SPEED, life: 90, foe: true, sn: false, dmg: 2.5, sx: e.wx });
+	flashes.push({ x: e.wx, y: e.wy, a, life: 7, max: 7 });           // пули и вспышка — из окна
+	h.shootCD = MG_CD;
+	h.p.chest.px -= Math.cos(h.aimA) * 1.2; h.p.chest.py -= Math.sin(h.aimA) * 1.2;   // отдача
+}
 function spawnFoe(x, i) {
   const h = createHero(x);
   h.foe = true;
@@ -1476,7 +1885,7 @@ function spawnFoe(x, i) {
   foes.push({ hero: h, health: fh, keys: {}, stun: 0, foe: true });
 }
 function spawnWave() {
-  const alive = foes.filter(e => !e.health.state.dead).length;
+  const alive = foes.filter(e => !e.health.state.dead && !e.gunner).length;
   const n = Math.min(FOE_MAX - alive, 2 + Math.floor(Math.random() * 3));
   if (n <= 0) return;
   const baseX = FINISH_X;                                // подкрепление всегда выходит с базы
@@ -1494,6 +1903,8 @@ function spawnFoeGroups() {
     for (let i = 0; i < size; i++) spawnFoe(gx + i * 60 + Math.random() * 20, foes.length);
   }
 }
+// цель, по которой стреляют: живой, в сознании, не в болевом шоке (лежачих без сознания не добивают)
+const canTarget = u => { const st = u.health.state; return !st.dead && st.ko === 0 && !st.shock; };
 // общий «мозг» боя: выбор цели, оружие, прицел (для союзников и врагов)
 function combatThink(a) {
   const h = a.hero, st = a.health.state;
@@ -1516,9 +1927,16 @@ function combatThink(a) {
   const x = h.p.pelvis.x;
   let bd = h.sniper ? SNIPER_RANGE : SIGHT;
   for (const u of (h.foe ? everyone() : foes)) {
-    if (u.health.state.dead) continue;
+    if (!canTarget(u)) continue;
     const d = Math.abs(u.hero.p.pelvis.x - x);
     if (d < bd) { bd = d; a.tgt = u; }
+  }
+  if (a.heardT > 0) {                                        // услышал звон каски
+    a.heardT--;
+    if (!a.tgt) {                                            // цели не видит — достаёт оружие и смотрит на звук
+      a.seeT = Math.max(a.seeT, 60);
+      h.aimWant = a.heardX < x ? Math.PI : 0;
+    }
   }
   if (a.tgt) a.seeT = 150; else if (a.seeT > 0) a.seeT--;   // убирает оружие через 2.5 с после потери цели
   h.gunWant = a.seeT > 0 && !h.carrying;
@@ -1576,7 +1994,7 @@ function foeThink(e) {
       dir = Math.abs(cx) > 14 ? Math.sign(cx) : 0;
       if (dir === 0) k.KeyS = true;
     } else if (dir === 0 && e.cover) k.KeyS = true;
-  }
+  } else if (e.heardT > 0 && Math.abs(e.heardX - x) > 250) dir = Math.sign(e.heardX - x);   // услышал звон — идёт на звук
   dir = steadyDir(e, dir);
   if (dir > 0) k.KeyD = true; else if (dir < 0) k.KeyA = true;
 }
@@ -1587,9 +2005,9 @@ function updateFoes() {
   }
   for (let i = foes.length - 1; i >= 0; i--) {
     const e = foes[i];
-    foeThink(e);
+    if (e.gunner) gunnerThink(e); else foeThink(e);
     runAs(e, stepHero);
-    aiShoot(e);
+    if (e.gunner) gunnerShoot(e); else aiShoot(e);
     if (e.health.state.dead && ++e.deadT > 900 && !onScreen(e.hero.p.pelvis.x - 150, 300)) foes.splice(i, 1);
   }
 }
@@ -1945,8 +2363,8 @@ function stepHero() {
 			const gF = gx(13, 9), gB = gx(41 - 26 * rl, 2 + 20 * rl);
 			const txB = gB.x, tyB = gB.y;
 			const txF = gF.x, tyF = gF.y;
-			const armB = ik2(cc, { x: txB, y: tyB }, S.upperArm, S.foreArm, -fl, true);
-			const armF = ik2(cc, { x: txF, y: tyF }, S.upperArm, S.foreArm, -fl, true);
+			const armB = ik2(cc, { x: txB, y: tyB }, S.upperArm, S.foreArm, -h.f, true);
+			const armF = ik2(cc, { x: txF, y: tyF }, S.upperArm, S.foreArm, -h.f, true);
 			pull(P.wristB, armB.end.x, armB.end.y, 0.9, 14);
 			pull(P.wristF, armF.end.x, armF.end.y, 0.9, 14);
 			pull(P.elbowB, armB.mid.x, armB.mid.y, 0.9, 14);
@@ -1963,7 +2381,15 @@ function stepHero() {
 					const lx = f * (reach + mulL * sw);
 					const ly = RADIUS.chest - RADIUS[part] - handLift;
 					const grip = lie > 0.5 && handLift < 1;
-					muscle(P.chest, q, lerp(tx, lx, lie), lerp(o.y, ly - (grip && part === 'elbow' ? 22 : 0), lie), kUp, 1, grip ? 0.1 : 1); // локоть приподнят, иначе подпирает грудь
+					let mx = lerp(tx, lx, lie), my = lerp(o.y, ly - (grip && part === 'elbow' ? 22 : 0), lie);
+					const ck = (s === 'F' && h.bandWant) ? 0 : ease(h.coverK || 0);   // присел без оружия — руки к голове (той же мышцей, без телепорта)
+					if (ck > 0.001) {
+						const hc = P.head;
+						const cx = part === 'wrist' ? (s === 'B' ? hc.x - f * 4 : hc.x + f * 7) : (s === 'B' ? hc.x + f * 6 : hc.x + f * 17);
+						const cy = part === 'wrist' ? (s === 'B' ? hc.y - 11 : hc.y - 9) : (s === 'B' ? hc.y + 16 : hc.y + 10);
+						mx = lerp(mx, cx - P.chest.x, ck); my = lerp(my, cy - P.chest.y, ck);
+					}
+					muscle(P.chest, q, mx, my, kUp, 1, grip ? 0.1 : 1); // локоть приподнят, иначе подпирает грудь
 					if (grip && part === 'wrist') q.plant = true;
 				}
 			}
@@ -1974,16 +2400,9 @@ function stepHero() {
 			nudge(P.elbowB, P.chest.x - f * 16, P.chest.y - 6, 0.4);
 		}
     if (h.nadeW > 0.01 || h.throwT > 0) nadeArm(h);        // бросок гранаты: замах → бросок → доводка
-    const cover = h.isPlayer && h.crouch > 0.5 && h.gun < 0.05 && !h.gunWant && !h.bandWant && !h.bandaging && !h.treat
+    const cover = h.isPlayer && h.crouch > 0.5 && h.gun < 0.05 && !h.gunWant && !h.bandaging && !h.treat
       && !h.nadeAim && !(h.throwT > 0) && h.bal > 0.6 && lie < 0.3 && Health.conscious();
     h.coverK = (h.coverK || 0) + ((cover ? 1 : 0) - (h.coverK || 0)) * 0.15;
-    if (h.coverK > 0.02) {                                  // присел без оружия — закрывает голову руками
-      const ck = ease(h.coverK), hd = P.head;
-      nudge(P.wristB, hd.x - f * 4, hd.y - 11, 0.5 * ck);
-      nudge(P.wristF, hd.x + f * 7, hd.y - 9, 0.5 * ck);
-      nudge(P.elbowB, hd.x + f * 6, hd.y + 16, 0.3 * ck);
-      nudge(P.elbowF, hd.x + f * 17, hd.y + 10, 0.3 * ck);
-    }
     if (h.bandWant && !h.treat && lie < 0.3) {              // бинт в руке: кисть перед грудью
       nudge(P.wristF, P.chest.x + f * 26, P.chest.y + 10, 0.4);
       nudge(P.elbowF, P.chest.x + f * 10, P.chest.y + 22, 0.3);
@@ -2089,8 +2508,10 @@ function update() {
 	updateCarry();
 	updateArmor();
 	updateFoes();
+	updateCallouts();
 	updateGrenades();
 	updateShards();
+	updateBigShards();
 	updateBullets();
 	updateMags();
 	updateRockets();
@@ -2172,6 +2593,7 @@ function resetGame() {
   nades = NADE_MAX;
   mags.length = 0;
   shards.length = 0;
+  bigShards.length = 0;
   bullets.length = 0;
   flashes.length = 0;
   rockets.length = 0;
@@ -2184,7 +2606,9 @@ function resetGame() {
   helmets.length = 0;
   foes.length = 0;
   foeTimer = 240;
+  callouts.length = 0;
   spawnFoeGroups();
+  spawnGunners();
   formation.n = -1;
   formation.mode = 'march';
   debris.length = 0;
@@ -2234,6 +2658,7 @@ hero.isPlayer = true;
 genWorld();
 genSquad();
 spawnFoeGroups();
+spawnGunners();
 const DT = 1000 / 60;
 let last = performance.now();
 let acc = 0;
