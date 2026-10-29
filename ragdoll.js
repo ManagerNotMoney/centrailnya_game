@@ -58,6 +58,7 @@ function stepHero() {
   const canStand = standing && stun <= 0 && Health.conscious() && Health.canRise();
   if (h.cot && (dir !== 0 || Health.state.dead)) releaseCot(h);   // пошёл или погиб — койка свободна
   const wantLie = !!(keys.ShiftLeft || keys.ShiftRight || h.cot);
+  if (proneAim(h) && h.gunWant) dir = 0;                              // лёжа с винтовкой в руках не ползём (убери оружие на 1 — поползёшь)
   const armed = h.isPlayer && (h.gunWant || h.gun > 0.05);          // оружие в руках: R — перезарядка, лечиться нельзя (сначала 1)
   const canAct = canStand && !h.getup && h.bal > 0.5 && h.lie < 0.5 && !armed;
   h.rollU = -1;                                                      // прогресс бинтования для анимации мотка; -1 — моток не разматывается
@@ -140,6 +141,10 @@ function stepHero() {
 			const cl = Math.max(lerp(-Math.PI / 2, -0.5, h.blind), Math.min(lerp(MAX_DOWN, 0.2, h.blind), e2));
 			a = Math.cos(a) < 0 ? Math.PI - cl : cl;
 		}
+		if (proneAim(h)) {											// лёжа: ствол только вперёд, угол ограничен
+			const e3 = Math.max(-PRONE_AIM_UP, Math.min(PRONE_AIM_DOWN, Math.atan2(Math.sin(a), Math.abs(Math.cos(a)))));
+			a = h.f > 0 ? e3 : Math.PI - e3;
+		}
 		h.aimA = a;
 	} else {
 		h.aimA = h.aimWant != null ? h.aimWant : (h.f > 0 ? 0 : Math.PI);
@@ -156,7 +161,7 @@ function stepHero() {
 		if (!h.isPlayer) h.turnCD = 45;                  // боты после разворота 0,75 с не разворачиваются по прицелу
 		if (!h.isPlayer && h.aimWant == null) h.aimA = h.f > 0 ? 0 : Math.PI;
 	}
-	const inControl = h.bal > 0.6 && !h.getup && h.lie < 0.3 && Health.conscious();
+	const inControl = h.bal > 0.6 && !h.getup && (h.lie < 0.3 || proneAim(h)) && Health.conscious();
 	if (h.bandWant && (!inControl || h.nadeAim || h.throwT > 0)) h.bandWant = false;   // упал / бросок гранаты — бинт убран
 	if (h.isPlayer) nadeStep(h);
 	reloadStep(h);
@@ -200,6 +205,8 @@ function stepHero() {
     h.crouch = Math.max(0, Math.min(1.1, h.crouch + h.crV));
     if (h.crouch === 0 && h.crV < 0) h.crV = 0;
     const lie = h.lie, cr = h.crouch;
+    h.propK = (h.propK || 0) + ((proneAim(h) && h.gun > 0.5 && h.bal > 0.6 ? 1 : 0) - (h.propK || 0)) * 0.1;
+    const PR = proneAt(h.propK);                                      // поза лёжа: между «плашмя» и «на локтях»
     const fx = bodyFx(h, w, cr, lie);                                // дыхание, перенос веса, инерция, попадания
     const amp = GAIT.amp * (1 - 0.35 * cr - 0.2 * lie);
     const liftH = GAIT.lift * (1 - 0.4 * cr - 0.5 * lie);
@@ -247,15 +254,15 @@ function stepHero() {
     const sway = (Health.sway() + (Health.state.lame ? f * 0.7 * w : 0)) * (1 - lie);   // хромота: корпус клонит вперёд
     const sp = rel('pelvis', 'chest'), nk = rel('chest', 'neck'), hd = rel('neck', 'head');
     muscle(P.pelvis, P.chest,
-      lerp(sp.x + f * (3 * w + 8 * cr) + sway * 7, f * PRONE.chest.fx, lie) + fx.cx,
-      lerp(sp.y, PRONE.chest.y + RADIUS.pelvis, lie) + fx.cy, kUp);
+      lerp(sp.x + f * (3 * w + 8 * cr) + sway * 7, f * PR.chest.fx, lie) + fx.cx,
+      lerp(sp.y, PR.chest.y + RADIUS.pelvis, lie) + fx.cy, kUp);
     muscle(P.chest, P.neck,
-      lerp(nk.x + f * (1 * w + 5 * cr) + sway * 5, f * (PRONE.neck.fx - PRONE.chest.fx), lie) + fx.nx,
-      lerp(nk.y, PRONE.neck.y - PRONE.chest.y, lie) + fx.ny, kUp);
+      lerp(nk.x + f * (1 * w + 5 * cr) + sway * 5, f * (PR.neck.fx - PR.chest.fx), lie) + fx.nx,
+      lerp(nk.y, PR.neck.y - PR.chest.y, lie) + fx.ny, kUp);
     muscle(P.neck, P.head,
-      lerp(hd.x + f * (1 * w + 5 * cr) + sway * 5, f * (PRONE.head.fx - PRONE.neck.fx), lie) + fx.hx,
-      lerp(hd.y, PRONE.head.y - PRONE.neck.y, lie) + fx.hy, kUp);
-		const aiming = h.bal > 0.6 && lie < 0.3 && !h.bandaging && !h.treat && h.gun > 0.5 && !h.nadeAim && !(h.throwT > 0);
+      lerp(hd.x + f * (1 * w + 5 * cr) + sway * 5, f * (PR.head.fx - PR.neck.fx), lie) + fx.hx,
+      lerp(hd.y, PR.head.y - PR.neck.y, lie) + fx.hy, kUp);
+		const aiming = h.bal > 0.6 && (lie < 0.3 || proneAim(h)) && !h.bandaging && !h.treat && h.gun > 0.5 && !h.nadeAim && !(h.throwT > 0);
 				if (aiming) {
 			const ax = Math.cos(h.aimA), ay = Math.sin(h.aimA);
 			const sh = P.chest;                                      // плечо
@@ -263,10 +270,12 @@ function stepHero() {
 			const fl = (Math.cos(h.aimA) < 0 ? -1 : 1) * (1 - 2 * ease(h.blind || 0));   // при хвате вслепую оружие перевёрнуто
 			const gx = (lx, ly) => ({ x: cc.x + ax * lx - ay * ly * fl, y: cc.y + ay * lx + ax * ly * fl });
 			const gF = h.mg ? gx(34, 10) : gx(13, 9), gB = reloadHand(h, gx) || (h.mg ? gx(52, 2) : gx(41, 2));
-			const txB = gB.x, tyB = gB.y;
-			const txF = gF.x, tyF = gF.y;
-			const armB = ik2(sh, { x: txB, y: tyB }, S.upperArm, S.foreArm, -h.f, true);
-			const armF = ik2(sh, { x: txF, y: tyF }, S.upperArm, S.foreArm, -h.f, true);
+			const pr = proneAim(h);										// лёжа на локтях: кисти дальше вперёд, локти упираются в землю
+			const hB = pr ? (reloadHand(h, gx) || gx(54, 2)) : gB, hF = pr ? gx(44, 3) : gF;
+			const txB = hB.x, tyB = hB.y;
+			const txF = hF.x, tyF = hF.y;
+			const armB = ik2(sh, { x: txB, y: tyB }, S.upperArm, S.foreArm, -h.f, !pr);
+			const armF = ik2(sh, { x: txF, y: tyF }, S.upperArm, S.foreArm, -h.f, !pr);
 			pull(P.wristB, armB.end.x, armB.end.y, 0.9, 14);
 			pull(P.wristF, armF.end.x, armF.end.y, 0.9, 14);
 			pull(P.elbowB, armB.mid.x, armB.mid.y, 0.9, 14);
@@ -392,6 +401,12 @@ function stepHero() {
       p.px += (p.x - p.px) * FRICTION;
     }
   }
+  if (proneAim(h) && (h.gun > 0.5 || h.propK > 0.02) && h.bal > 0.6 && !h.getup) {       // лёжа с оружием: тело не скользит по земле
+    if (h.proneX == null) h.proneX = P.pelvis.x;
+    const d = h.proneX - P.pelvis.x;
+    if (Math.abs(d) < 12) { for (const [, p] of entries) { p.x += d; p.px += d; } }
+    else h.proneX = P.pelvis.x;                                      // сильно толкнули (взрыв) — отпускаем и фиксируем заново
+  } else h.proneX = null;
   if (h.bal > 0.6 && h.lie < 0.5) {
     h.tip = tipping(P) > TIP_MARGIN ? h.tip + 1 : Math.max(0, h.tip - 2);
     if (h.tip > 18) { stun = Math.max(stun, 90); h.tip = 0; }

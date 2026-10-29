@@ -14,6 +14,17 @@ const PRONE = {
   neck:  { fx: 74, y: -14 },
   head:  { fx: 98, y: -10 }
 };
+// лёжа с оружием в руках: на локтях, грудь приподнята, голова поднята к прицелу
+const PRONE_PROP = {
+  chest: { fx: 60, y: -22 },
+  neck:  { fx: 68, y: -31 },
+  head:  { fx: 88, y: -45 }
+};
+function proneAt(k) {                                   // k = 0 — обычное «лёжа», 1 — на локтях с оружием
+  const o = {};
+  for (const n in PRONE) o[n] = { fx: PRONE[n].fx + (PRONE_PROP[n].fx - PRONE[n].fx) * k, y: PRONE[n].y + (PRONE_PROP[n].y - PRONE[n].y) * k };
+  return o;
+}
 const D2R = Math.PI / 180;
 const ease = u => u * u * (3 - 2 * u);
 const isUpright = h => h.p.pelvis.y - h.p.chest.y > S.torso * 0.7;

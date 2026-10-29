@@ -244,7 +244,7 @@ function drawRifle() {
 	if (h.sniper) drawSniperRifle(); else if (h.mg) drawMG(); else drawAK();
 	ctx.restore();
 }
-function drawSniperRifle() {
+function drawSniperRifleBase() {
 	ctx.lineWidth = 1.5;
 	ctx.lineJoin = 'round';
 	ctx.strokeStyle = '#111';
@@ -271,6 +271,7 @@ function drawSniperRifle() {
 	ctx.stroke();
 }
 function drawAK() {
+	const sk = AK_SKINS[(hero.look && hero.look.akSkin) || 'default'] || AK_SKINS.default;
 	ctx.lineWidth = 1.5;
 	ctx.lineJoin = 'round';
 	ctx.strokeStyle = '#111';
@@ -282,10 +283,10 @@ function drawAK() {
 		ctx.closePath();
 		ctx.fillStyle = col; ctx.fill(); ctx.stroke();
 	};
-	poly([[-18, -5], [-3, -3], [-3, 4], [-12, 8], [-18, 7]], '#6b4a2b');
+	poly([[-18, -5], [-3, -3], [-3, 4], [-12, 8], [-18, 7]], sk.stock);
 	box(50, -1.5, 28, 3, '#1c1c1c');
 	box(30, -5, 24, 3, '#2a2a22');
-	box(30, -2, 22, 6, '#7a5632');
+	box(30, -2, 22, 6, sk.wood);
 	if (!hero.magOut) {                                                     // магазин отсоединён — на его месте пусто
 		ctx.beginPath();
 		ctx.moveTo(26, 4); ctx.lineTo(34, 4);
@@ -293,19 +294,20 @@ function drawAK() {
 		ctx.lineTo(35, 22);
 		ctx.quadraticCurveTo(28, 15, 26, 4);
 		ctx.closePath();
-		ctx.fillStyle = '#1f1f18'; ctx.fill(); ctx.stroke();
+		ctx.fillStyle = sk.mag2; ctx.fill(); ctx.stroke();
 	}
-	poly([[9, 4], [17, 4], [15, 16], [8, 16]], '#3a2a1a');
-	box(-3, -4.5, 34, 9, '#34362c');
-	box(2, -6, 26, 2, '#4a4c40');
+	if (!hero.magOut) poly([[9, 4], [17, 4], [15, 16], [8, 16]], sk.mag);		// магазин вынут — на его месте пусто
+	box(-3, -4.5, 34, 9, sk.body);
+	box(2, -6, 26, 2, sk.cover);
+	drawAKDeco(sk);
 	box(24, -8, 3, 2, '#111');
 	poly([[64, -1.5], [64, -6], [67, -6], [67, -1.5]], '#111');
-	box(76, -3, 4, 6, '#111');
+	box(76, -3, 4, 6, sk.muzzle);
 	ctx.beginPath();
 	ctx.moveTo(18, 4.5); ctx.lineTo(18, 8); ctx.lineTo(25, 8); ctx.lineTo(25, 4.5);
 	ctx.stroke();
 }
-function drawMG() {                                                         // ручной пулемёт: кожух ствола с прорезями, сошки, короб с лентой
+function drawMGBase() {                                                         // ручной пулемёт: кожух ствола с прорезями, сошки, короб с лентой
 	ctx.lineWidth = 1.5;
 	ctx.lineJoin = 'round';
 	ctx.strokeStyle = '#111';
@@ -369,7 +371,7 @@ function drawReloadMag() {                                 // магазин и 
 	ctx.lineWidth = 1.5;
 	ctx.lineJoin = 'round';
 	ctx.strokeStyle = '#111';
-	ctx.fillStyle = h.mg ? '#4a4d3a' : h.sniper ? '#2a2a22' : '#1f1f18';
+	ctx.fillStyle = magColor(h);
 	ctx.beginPath();
 	if (h.mg) { ctx.moveTo(-9, -6); ctx.lineTo(9, -6); ctx.lineTo(9, 6); ctx.lineTo(-9, 6); }
 	else if (h.sniper) { ctx.moveTo(-3, -6); ctx.lineTo(5, -6); ctx.lineTo(3, 5); ctx.lineTo(-4, 5); }
@@ -384,7 +386,7 @@ function drawReloadMag() {                                 // магазин и 
 }
 function drawHands() {
 	const h = hero;
-	if (h.lie > 0.6 || h.bal < 0.6 || h.gun < 1) return;
+	if ((h.lie > 0.6 && !proneAim(h)) || h.bal < 0.6 || h.gun < 1) return;
 	ctx.fillStyle = handColor(false);
 	ctx.strokeStyle = '#111';
 	ctx.lineWidth = 2;
@@ -807,15 +809,7 @@ function drawHandGrenade() {
 	ctx.save();
 	ctx.translate(w.x, w.y);
 	ctx.rotate(0.3);
-	ctx.fillStyle = '#4a5530';
-	ctx.strokeStyle = '#111';
-	ctx.lineWidth = 2;
-	ctx.beginPath();
-	ctx.ellipse(0, -3, 6, 7.2, 0, 0, Math.PI * 2);
-	ctx.fill();
-	ctx.stroke();
-	ctx.fillStyle = '#888';
-	ctx.fillRect(-2, -13, 4, 4);
+	drawNade(-3, 6, nadeSkin(h));
 	ctx.restore();
 	ctx.fillStyle = handColor(false);                           // пальцы поверх гранаты
 	ctx.strokeStyle = '#111';
@@ -857,15 +851,7 @@ function drawGrenades() {
     ctx.save();
     ctx.translate(g.x, g.y);
     ctx.rotate(g.a);
-    ctx.fillStyle = '#4a5530';
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, g.r, g.r * 1.2, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#888';
-    ctx.fillRect(-2, -g.r * 1.2 - 3, 4, 4);
+    drawNade(0, g.r, nadeSkin(hero));
     ctx.restore();
     const rate = g.fuse < 60 ? 4 : g.fuse < 120 ? 10 : 20;
     if (Math.floor(g.fuse / rate) % 2 === 0) {
@@ -997,7 +983,7 @@ function drawDust() {
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
     ctx.strokeStyle = '#111';
-    ctx.fillStyle = m.mg ? '#4a4d3a' : m.sn ? '#2a2a22' : '#1f1f18';
+    ctx.fillStyle = m.c || (m.mg ? '#4a4d3a' : m.sn ? '#2a2a22' : '#1f1f18');
     ctx.beginPath();
     if (m.mg) { ctx.moveTo(-9, -6); ctx.lineTo(9, -6); ctx.lineTo(9, 6); ctx.lineTo(-9, 6); }
     else if (m.sn) { ctx.moveTo(-3, -6); ctx.lineTo(5, -6); ctx.lineTo(3, 5); ctx.lineTo(-4, 5); }

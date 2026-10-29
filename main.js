@@ -189,10 +189,13 @@ const MAG_GRAB_AT = 0.56;    // новый магазин достан из по
 const MAG_IN_AT = 0.84;      // новый магазин вставлен (стрелять можно, рука ещё возвращается)
 
 const magSize = h => h.sniper ? SNIPER_MAG : h.mg ? MG_MAG : MAG_SIZE;
-const gunReach = h => h.sniper ? 112 : h.mg ? 104 : 80;     // расстояние от груди до дула
+const gunReach = h => h.sniper ? 112 : h.mg ? 104 : 80;
+const PRONE_AIM_UP = 0.6;          // лёжа ствол вверх не круче ~35°
+const PRONE_AIM_DOWN = 0.05;       // вниз ~3°, иначе дуло упрётся в землю
+const proneAim = h => !!(h.isPlayer && h.sniper && h.lie > 0.8);   // игрок лежит со снайперкой в руках     // расстояние от груди до дула
 function startReload(h, hl = playerHealth) {               // R у игрока; у ботов вызывает aiShoot
   if (h.reloadT > 0 || (h.ammo >= magSize(h) && !h.magOut)) return;
-  if (!h.gunWant || h.gun < 1 || h.getup || h.lie > 0.3 || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.carrying || h.bandaging || h.treat || !hl.conscious() || hl.state.dead) return;
+  if (!h.gunWant || h.gun < 1 || h.getup || (h.lie > 0.3 && !proneAim(h)) || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.carrying || h.bandaging || h.treat || !hl.conscious() || hl.state.dead) return;
   	h.reloadMax = h.reloadT = h.sniper ? SNIPER_RELOAD_T : h.mg ? MG_RELOAD_T : RELOAD_T;
   if (h.magOut && !h.magHeld) h.reloadT = Math.round(h.reloadMax * (1 - MAG_DROP_AT));   // старый магазин уже выброшен — сразу к подсумку
 }
@@ -201,7 +204,7 @@ function dropMag(h) {                                      // магазин в�
   const flip = Math.cos(a) < 0 ? -1 : 1;
   mags.push({
     x: w.x, y: w.y,
-    a, flip, sn, mg: !!h.mg,
+    a, flip, sn, mg: !!h.mg, c: magColor(h),
     vx: h.f * (0.4 + Math.random() * 1.2), vy: 0.5 + Math.random(),
     va: (Math.random() - 0.5) * 0.3, life: 900
   });
@@ -209,7 +212,7 @@ function dropMag(h) {                                      // магазин в�
 }
 function reloadStep(h) {                                   // вызывается для каждого бойца внутри stepHero
   if (!(h.reloadT > 0)) return;
-  if (!h.gunWant || h.getup || h.lie > 0.3 || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.bandaging || h.treat || !Health.conscious() || Health.state.dead) {   // убрал оружие / упал / бросок — перезарядка сорвана
+  if (!h.gunWant || h.getup || (h.lie > 0.3 && !proneAim(h)) || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.bandaging || h.treat || !Health.conscious() || Health.state.dead) {   // убрал оружие / упал / бросок — перезарядка сорвана
     if (h.magHeld) { dropMag(h); h.magHeld = false; }      // магазин был в руке — роняем
     h.reloadT = 0; return;
   }
@@ -486,7 +489,7 @@ function updateBigShards() {
   }
 }
 function shootUnit(h) {
-	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5 || h.bandaging || h.carrying || h.nadeAim || h.throwT > 0) return;
+	if (h.shootCD > 0 || h.gun < 1 || h.getup || (h.lie > 0.5 && !proneAim(h)) || h.bal < 0.5 || h.bandaging || h.carrying || h.nadeAim || h.throwT > 0) return;
 	if (h.blind > 0.02 && h.blind < 0.8) return;                     // оружие ещё поднимается / опускается
 	if (h.ammo <= 0 || h.magOut || (h.reloadT > 0 && h.reloadT > h.reloadMax * (1 - MAG_IN_AT))) return;   // после вставки магазина стреляем, не дожидаясь, пока рука вернётся на цевьё
 	h.shootCD = h.sniper ? SNIPER_CD : h.mg ? MG_CD : SHOOT_CD;
@@ -506,8 +509,10 @@ function shootUnit(h) {
 	h.handShake = Math.min(1.6, (h.handShake || 0) + (sn ? 0.9 : h.mg ? 0.4 : 0.5) + 0.5 * (h.blind || 0));   // руки трясутся от стрельбы, вслепую сильнее
 	// отдача: толкаем корпус и таз назад
 	const rec = sn ? 3 : h.mg ? 0.8 : 1;
-	h.p.chest.px -= ax * 1.6 * rec; h.p.chest.py -= ay * 1.6 * rec;
-	h.p.pelvis.px -= ax * 0.5 * rec; h.p.pelvis.py -= ay * 0.5 * rec;
+	if (!proneAim(h)) {											// лёжа отдача не толкает корпус
+		h.p.chest.px -= ax * 1.6 * rec; h.p.chest.py -= ay * 1.6 * rec;
+		h.p.pelvis.px -= ax * 0.5 * rec; h.p.pelvis.py -= ay * 0.5 * rec;
+	}
 }
 // твёрдый объект в точке (x, y) или null (то же, что shardBlocked, но возвращает сам объект)
 function solidAt(x, y) {
@@ -1277,6 +1282,7 @@ const menuEl = document.getElementById('menu');
 const playBtn = document.getElementById('btnPlay');
 let inMenu = true;
 let started = false;
+let battleGear = null;                                     // оружие и скины, зафиксированные на время боя
 let leaving = false;                                       // идёт анимация выхода из меню
 let leaveTimers = [];
 function startPlay() {
@@ -1289,6 +1295,9 @@ function startPlay() {
       document.body.classList.add('starting');             // картинка игры проявляется из темноты
       if (!started) {
         started = true;
+        const L = hero.look || {};
+        battleGear = { weapon: hero.sniper ? 'sniper' : hero.mg ? 'mg' : 'ak' };
+        for (const f of Object.values(SKIN_FIELD)) battleGear[f] = L[f] || 'default';
         hudEl.classList.remove('hidden');
         helpTimer = setTimeout(() => hudEl.classList.add('hidden'), 15000);   // подсказка сама прячется через 15 с
       }
@@ -1314,20 +1323,111 @@ function openMenu() {
   playBtn.querySelector('span').textContent = 'Продолжить';
   menuEl.classList.remove('gone');
   document.body.classList.add('in-menu');
+  refreshSkins();
 }
 playBtn.addEventListener('click', startPlay);
 const keysBtn = document.getElementById('btnKeys');
 const charBtn = document.getElementById('btnChar');
+const skinsBtn = document.getElementById('btnSkins');
 // правая панель меню: '' — «Что в игре», 'keys' — «Управление», 'char' — «Персонаж»
 function setMenuPanel(name) {
 	menuEl.classList.toggle('show-keys', name === 'keys');
 	menuEl.classList.toggle('show-char', name === 'char');
 	keysBtn.classList.toggle('active', name === 'keys');
 	charBtn.classList.toggle('active', name === 'char');
+	menuEl.classList.toggle('show-skins', name === 'skins');
+	skinsBtn.classList.toggle('active', name === 'skins');
 	if (name === 'char') openChar();
+	if (name === 'skins') openSkins();
 }
 keysBtn.addEventListener('click', () => setMenuPanel(menuEl.classList.contains('show-keys') ? '' : 'keys'));
 charBtn.addEventListener('click', () => setMenuPanel(menuEl.classList.contains('show-char') ? '' : 'char'));
+skinsBtn.addEventListener('click', () => setMenuPanel(menuEl.classList.contains('show-skins') ? '' : 'skins'));
+// ===== Меню «Скины»: выбор оружия =====
+const skinBtns = document.querySelectorAll('[data-weapon]');
+const akSkinBtns = document.querySelectorAll('[data-akskin]');
+const akSkinsEl = document.getElementById('akSkins');
+const skinViewEl = document.getElementById('skinView');
+const skinWName = document.getElementById('skinWName');
+const skinSName = document.getElementById('skinSName');
+const skinNadeBtn = document.getElementById('skinNadeTab');
+let skinNadeTab = false;									// открыта вкладка «Граната»
+function skinKey() {										// чей скин сейчас выбираем: 'nade' или оружие
+	return skinNadeTab ? 'nade' : ((heroCfg && heroCfg.weapon) || 'ak');
+}
+akSkinBtns.forEach(b => b.addEventListener('click', () => {
+	heroCfg[SKIN_FIELD[skinKey()]] = b.dataset.akskin;
+	applyCharCfg();
+}));
+function stepSkin(dir) {									// листание скинов по кругу: dir = -1 или +1
+	if (!heroCfg || started) return;
+	const list = [...akSkinBtns];
+	const cur = heroCfg[SKIN_FIELD[skinKey()]] || 'default';
+	const i = Math.max(0, list.findIndex(b => b.dataset.akskin === cur));
+	list[(i + dir + list.length) % list.length].click();
+}
+const skinPrevBtn = document.getElementById('skinPrev'), skinNextBtn = document.getElementById('skinNext');
+const skinLockEl = document.getElementById('skinLock');
+skinPrevBtn.addEventListener('click', () => stepSkin(-1));
+skinNextBtn.addEventListener('click', () => stepSkin(1));
+let skinWheelT = 0;
+skinViewEl.addEventListener('wheel', e => {					// колесо над превью: вниз — следующий, вверх — предыдущий
+	e.preventDefault();									// не даём меню прокручиваться
+	const now = performance.now();
+	if (now - skinWheelT < 140 || !e.deltaY) return;		// защита от «пулемёта» на тачпадах
+	skinWheelT = now;
+	stepSkin(e.deltaY > 0 ? 1 : -1);
+}, { passive: false });
+addEventListener('keydown', e => {							// ← → в меню скинов
+	if (!menuEl.classList.contains('show-skins')) return;
+	if (e.code === 'ArrowLeft') { stepSkin(-1); e.preventDefault(); }
+	else if (e.code === 'ArrowRight') { stepSkin(1); e.preventDefault(); }
+});
+const SKIN_DRAW = { ak: [drawAK, 31], sniper: [drawSniperRifle, 45], mg: [drawMG, 42], nade: [drawNadePreview, 0, 6] };	// функция, центр оружия по X
+const skinCv = document.getElementById('skinPreview');
+function drawSkinView() {												// крупно рисует выбранное оружие в окне под кнопками
+	const d = SKIN_DRAW[skinKey()];
+	const c = skinCv.getContext('2d'), main = ctx, mo = hero.magOut;
+	hero.magOut = false;												// магазин рисуем всегда
+	c.clearRect(0, 0, skinCv.width, skinCv.height);
+	c.save();
+	c.translate(skinCv.width / 2, skinCv.height / 2);
+	c.scale(d[2] || 3, d[2] || 3);
+	c.translate(-d[1], -4);
+	ctx = c;
+	try { d[0](); } finally { ctx = main; c.restore(); hero.magOut = mo; }
+}
+function openSkins() {
+	if (!heroCfg) heroCfg = charNorm(hero.look);
+	refreshSkins();
+}
+function refreshSkins() {
+	if (!heroCfg) return;
+	skinBtns.forEach(b => b.classList.toggle('on', !skinNadeTab && heroCfg.weapon === b.dataset.weapon));
+	skinNadeBtn.classList.toggle('on', skinNadeTab);
+		const cw = skinKey(), cs = heroCfg[SKIN_FIELD[cw]] || 'default';	// скин выбранного оружия
+	akSkinsEl.hidden = false;
+	akSkinBtns.forEach(b => b.classList.toggle('on', cs === b.dataset.akskin));
+	skinWName.textContent = SKIN_WNAME[cw];
+	skinSName.textContent = SKIN_SNAME[cs] || SKIN_SNAME.default;
+	skinViewEl.style.setProperty('--sk', SKIN_ACC[cs] || SKIN_ACC.default);
+	const lock = started;									// бой начался — выбор оружия и скина закрыт
+	skinBtns.forEach(b => b.disabled = lock);
+	skinNadeBtn.disabled = lock;
+	akSkinBtns.forEach(b => b.disabled = lock);
+	skinPrevBtn.disabled = skinNextBtn.disabled = lock;
+	skinLockEl.hidden = !lock;
+	drawSkinView();
+}
+skinBtns.forEach(b => b.addEventListener('click', () => {
+	skinNadeTab = false;
+	heroCfg.weapon = b.dataset.weapon;
+	applyCharCfg();
+}));
+skinNadeBtn.addEventListener('click', () => {
+	skinNadeTab = true;
+	refreshSkins();
+});
 
 // ===== Меню «Персонаж» =====
 const charCv = document.getElementById('charPreview');
@@ -1347,23 +1447,66 @@ function openChar() {
 	if (!charBtns.length) buildCharUI();
 	refreshChar();
 }
+const CHAR_TAB_OF = { helmet: 'Каска', net: 'Каска', band: 'Каска', goggles: 'Каска', headset: 'Каска' };	// «Голова» делим на две вкладки
+const CHAR_DEP = {											// пункт показывается, только если имеет смысл
+	beard: c => !c.mask,
+	packC: c => c.pack !== 'none',
+	armCross: c => !!c.armband
+};
+const charTabsEl = document.getElementById('charTabs');
+const charRows = [];										// { o, tab, row }
+const charChecks = [];										// { o, inp } — чекбоксы «Нет / Есть»
+let charTab = '';
+function charTabOf(o) { return CHAR_TAB_OF[o.k] || (o.g === 'Голова' ? 'Лицо' : o.g); }
+function setCharTab(t) {
+	charTab = t;
+	charTabsEl.querySelectorAll('.char-tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+	charOptsEl.scrollTop = 0;
+	updateCharRows();
+}
+function updateCharRows() {
+	for (const r of charRows) {
+		const dep = CHAR_DEP[r.o.k];
+		r.row.classList.toggle('off', r.tab !== charTab || !!(dep && !dep(heroCfg)));
+	}
+}
 function buildCharUI() {
-	let grp = null;
 	for (const o of CHAR_OPTS) {
-		if (o.g !== grp) {
-			grp = o.g;
-			const h = document.createElement('h3');
-			h.textContent = grp;
-			charOptsEl.appendChild(h);
+		if (o.g === 'Оружие') continue;							// оружие выбирается во вкладке «Скины»
+		const tab = charTabOf(o);
+		if (!charTabsEl.querySelector('[data-tab="' + tab + '"]')) {
+			const t = document.createElement('button');
+			t.type = 'button';
+			t.className = 'char-tab';
+			t.dataset.tab = tab;
+			t.textContent = tab;
+			t.addEventListener('click', () => setCharTab(tab));
+			charTabsEl.appendChild(t);
 		}
 		const row = document.createElement('div');
 		row.className = 'char-row';
+		charRows.push({ o, tab, row });
 		const lab = document.createElement('span');
 		lab.className = 'char-lab';
 		lab.textContent = o.t;
 		const box = document.createElement('div');
 		box.className = 'char-vals';
-		o.v.forEach((val, i) => {
+		const isBool = o.v.length === 2 && o.v[0] === false && o.v[1] === true;	// «Нет / Есть» — чекбокс вместо двух кнопок
+		if (isBool) {
+			const sw = document.createElement('label');
+			sw.className = 'char-check';
+			const inp = document.createElement('input');
+			inp.type = 'checkbox';
+			inp.addEventListener('change', () => {
+				heroCfg[o.k] = inp.checked;
+				applyCharCfg();
+			});
+			sw.appendChild(inp);
+			sw.appendChild(document.createElement('i'));
+			box.appendChild(sw);
+			charChecks.push({ o, inp });
+		}
+		(isBool ? [] : o.v).forEach((val, i) => {
 			const b = document.createElement('button');
 			b.type = 'button';
 			if (o.c && val !== null) {
@@ -1385,8 +1528,10 @@ function buildCharUI() {
 		row.appendChild(box);
 		charOptsEl.appendChild(row);
 	}
+	setCharTab(charTabsEl.firstElementChild.dataset.tab);
 }
 function applyCharCfg() {
+	if (started && battleGear) Object.assign(heroCfg, battleGear);	// в бою оружие и скины менять нельзя
 	saveCharCur();												// автосохранение текущего облика
 	applyHeroWeapon();
 	applyLook(hero, Object.assign({}, heroCfg));				// сразу красим настоящего бойца — рестарт не нужен
@@ -1394,6 +1539,9 @@ function applyCharCfg() {
 }
 function refreshChar() {
 	for (const x of charBtns) x.b.classList.toggle('on', heroCfg[x.o.k] === x.val);
+	for (const x of charChecks) x.inp.checked = !!heroCfg[x.o.k];
+	updateCharRows();
+	refreshSkins();
 	drawCharPreview();
 }
 function drawCharPreview() {
@@ -1432,7 +1580,9 @@ const CHAR_PRESETS = {
 };
 document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
 	const w = heroCfg && heroCfg.weapon;										// пресет меняет внешность, но не оружие
+	const old = heroCfg || {};
 	heroCfg = charNorm(CHAR_PRESETS[b.dataset.preset]());
+	for (const f of Object.values(SKIN_FIELD)) if (old[f]) heroCfg[f] = old[f];	// скины оружия не теряем
 	if (w) heroCfg.weapon = w;
 	applyCharCfg();
 }));
