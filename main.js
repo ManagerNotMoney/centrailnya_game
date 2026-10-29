@@ -1,7 +1,7 @@
 'use strict';
 
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+let ctx = canvas.getContext('2d');							// let: превью персонажа временно подменяет контекст
 
 let W = 0, H = 0, GROUND = 0;
 function resize() {
@@ -180,16 +180,20 @@ const MAG_SIZE = 30;         // патронов в магазине АК
 const SNIPER_MAG = 10;       // патронов у снайпера
 const RELOAD_T = 84;         // перезарядка АК, кадров (1,4 с)
 const SNIPER_RELOAD_T = 110; // перезарядка снайпера, кадров
+const MG_MAG = 100;          // патронов в коробе пулемёта
+const MG_RELOAD_T = 170;     // перезарядка пулемёта, кадров (2,8 с)
+const MG_PLAYER_SPREAD = 0.05;   // собственный разброс пулемёта у игрока, рад
 const MAG_OUT_AT = 0.22;     // доля перезарядки: магазин вынут из оружия и остался в руке
 const MAG_DROP_AT = 0.34;    // старый магазин выброшен
 const MAG_GRAB_AT = 0.56;    // новый магазин достан из подсумка
 const MAG_IN_AT = 0.84;      // новый магазин вставлен (стрелять можно, рука ещё возвращается)
 
-const magSize = h => h.sniper ? SNIPER_MAG : MAG_SIZE;
+const magSize = h => h.sniper ? SNIPER_MAG : h.mg ? MG_MAG : MAG_SIZE;
+const gunReach = h => h.sniper ? 112 : h.mg ? 104 : 80;     // расстояние от груди до дула
 function startReload(h, hl = playerHealth) {               // R у игрока; у ботов вызывает aiShoot
   if (h.reloadT > 0 || (h.ammo >= magSize(h) && !h.magOut)) return;
   if (!h.gunWant || h.gun < 1 || h.getup || h.lie > 0.3 || h.bal < 0.6 || h.nadeAim || h.throwT > 0 || h.carrying || h.bandaging || h.treat || !hl.conscious() || hl.state.dead) return;
-  h.reloadMax = h.reloadT = h.sniper ? SNIPER_RELOAD_T : RELOAD_T;
+  	h.reloadMax = h.reloadT = h.sniper ? SNIPER_RELOAD_T : h.mg ? MG_RELOAD_T : RELOAD_T;
   if (h.magOut && !h.magHeld) h.reloadT = Math.round(h.reloadMax * (1 - MAG_DROP_AT));   // старый магазин уже выброшен — сразу к подсумку
 }
 function dropMag(h) {                                      // магазин выпадает из руки и падает на землю
@@ -197,7 +201,7 @@ function dropMag(h) {                                      // магазин в�
   const flip = Math.cos(a) < 0 ? -1 : 1;
   mags.push({
     x: w.x, y: w.y,
-    a, flip, sn,
+    a, flip, sn, mg: !!h.mg,
     vx: h.f * (0.4 + Math.random() * 1.2), vy: 0.5 + Math.random(),
     va: (Math.random() - 0.5) * 0.3, life: 900
   });
@@ -230,8 +234,8 @@ function reloadHand(h, gx) {
   h.magHand = null;
   if (!(h.reloadT > 0)) return null;
   const t = 1 - h.reloadT / h.reloadMax;
-  const mx = h.sniper ? 12 : 34, my = h.sniper ? 10 : 13;  // середина магазина в координатах оружия
-  const H0 = gx(41, 2), Hm = gx(mx, my), Ho = gx(mx + 5, my + 18), Hu = gx(mx + 1, my + 17), Hp = pouchPos(h);
+  	const mx = h.sniper ? 12 : h.mg ? 15 : 34, my = h.sniper ? 10 : h.mg ? 11 : 13;
+  	const H0 = h.mg ? gx(52, 2) : gx(41, 2), Hm = gx(mx, my), Ho = gx(mx + 5, my + 18), Hu = gx(mx + 1, my + 17), Hp = pouchPos(h);
   const seg = (a, b, u) => { const k = ease(Math.max(0, Math.min(1, u))); return { x: lerp(a.x, b.x, k), y: lerp(a.y, b.y, k) }; };
   let p;
   if (t < 0.14) p = seg(H0, Hm, t / 0.14);                              // от цевья к магазину
@@ -485,23 +489,23 @@ function shootUnit(h) {
 	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5 || h.bandaging || h.carrying || h.nadeAim || h.throwT > 0) return;
 	if (h.blind > 0.02 && h.blind < 0.8) return;                     // оружие ещё поднимается / опускается
 	if (h.ammo <= 0 || h.magOut || (h.reloadT > 0 && h.reloadT > h.reloadMax * (1 - MAG_IN_AT))) return;   // после вставки магазина стреляем, не дожидаясь, пока рука вернётся на цевьё
-	h.shootCD = h.sniper ? SNIPER_CD : SHOOT_CD;
+	h.shootCD = h.sniper ? SNIPER_CD : h.mg ? MG_CD : SHOOT_CD;
 	h.ammo--;
 	if (h === hero) stats.shots++;
 	const ax = Math.cos(h.aimA), ay = Math.sin(h.aimA);
 	const sn = !!h.sniper;
-	const reach = sn ? 112 : 80;
+	const reach = gunReach(h);
 	const go = gunOrigin(h);                                           // грудь, а при стрельбе вслепую — точка над головой
 	const mx = go.x + ax * reach;
 	const my = go.y + ay * reach;
 	const shakeSpread = h === hero ? 0.05 * (h.handShake || 0) : 0;   // дрожащие руки уводят ствол
-	const sa = h.aimA + (Math.random() - 0.5) * 2 * ((h.spread || 0) + 0.12 * (h.blind || 0) + shakeSpread);   // разброс у ботов + вслепую + дрожь рук
-	const spd = sn ? SNIPER_SPEED : BULLET_SPEED;
-	bullets.push({ x: mx, y: my, px: mx, py: my, vx: Math.cos(sa) * spd, vy: Math.sin(sa) * spd, life: sn ? 70 : 90, foe: !!h.foe, sn, dmg: sn ? SNIPER_DMG : 2.5, sx: mx, by: h === hero ? 'player' : h.foe ? 'enemy' : 'squad' });
+	const sa = h.aimA + (Math.random() - 0.5) * 2 * ((h.spread || 0) + 0.12 * (h.blind || 0) + shakeSpread + (h.mg ? MG_PLAYER_SPREAD : 0));   // разброс у ботов + вслепую + дрожь рук
+	const spd = sn ? SNIPER_SPEED : h.mg ? MG_BULLET_SPEED : BULLET_SPEED;
+	bullets.push({ x: mx, y: my, px: mx, py: my, vx: Math.cos(sa) * spd, vy: Math.sin(sa) * spd, life: sn ? 70 : 90, foe: !!h.foe, sn, mg: !!h.mg, dmg: sn ? SNIPER_DMG : 2.5, sx: mx, by: h === hero ? 'player' : h.foe ? 'enemy' : 'squad' });
 	flashes.push({ x: mx, y: my, a: h.aimA, life: 7, max: 7 });
-	h.handShake = Math.min(1.6, (h.handShake || 0) + (sn ? 0.9 : 0.5) + 0.5 * (h.blind || 0));   // руки трясутся от стрельбы, вслепую сильнее
+	h.handShake = Math.min(1.6, (h.handShake || 0) + (sn ? 0.9 : h.mg ? 0.4 : 0.5) + 0.5 * (h.blind || 0));   // руки трясутся от стрельбы, вслепую сильнее
 	// отдача: толкаем корпус и таз назад
-	const rec = sn ? 3 : 1;
+	const rec = sn ? 3 : h.mg ? 0.8 : 1;
 	h.p.chest.px -= ax * 1.6 * rec; h.p.chest.py -= ay * 1.6 * rec;
 	h.p.pelvis.px -= ax * 0.5 * rec; h.p.pelvis.py -= ay * 0.5 * rec;
 }
@@ -1220,6 +1224,7 @@ function resetGame() {
   hero = createHero(START_X);
   hero.isPlayer = true;
 applyLook(hero, heroLook());
+  applyHeroWeapon();
   won = false;
   camX = 0;
   genWorld();
@@ -1312,13 +1317,199 @@ function openMenu() {
 }
 playBtn.addEventListener('click', startPlay);
 const keysBtn = document.getElementById('btnKeys');
-keysBtn.addEventListener('click', () => {
-  const on = menuEl.classList.toggle('show-keys');      // «Что в игре» ⇄ «Управление»
-  keysBtn.classList.toggle('active', on);
-});
+const charBtn = document.getElementById('btnChar');
+// правая панель меню: '' — «Что в игре», 'keys' — «Управление», 'char' — «Персонаж»
+function setMenuPanel(name) {
+	menuEl.classList.toggle('show-keys', name === 'keys');
+	menuEl.classList.toggle('show-char', name === 'char');
+	keysBtn.classList.toggle('active', name === 'keys');
+	charBtn.classList.toggle('active', name === 'char');
+	if (name === 'char') openChar();
+}
+keysBtn.addEventListener('click', () => setMenuPanel(menuEl.classList.contains('show-keys') ? '' : 'keys'));
+charBtn.addEventListener('click', () => setMenuPanel(menuEl.classList.contains('show-char') ? '' : 'char'));
+
+// ===== Меню «Персонаж» =====
+const charCv = document.getElementById('charPreview');
+const charCtx = charCv.getContext('2d');
+const charOptsEl = document.getElementById('charOpts');
+const charBtns = [];											// { o, val, b } — для подсветки выбранных вариантов
+let charDummy = null, charDummyHealth = null, charGround = 0;
+function charNorm(L) {											// копия облика: роль «герой» и значения по умолчанию для новых полей
+	const C = Object.assign({}, L);
+	C.role = 'hero';
+	for (const o of CHAR_OPTS) if (C[o.k] === undefined) C[o.k] = o.v[0];
+	return C;
+}
+function openChar() {
+	renderCharSlots();
+	if (!heroCfg) heroCfg = charNorm(hero.look);				// стартуем с текущего (случайного) облика
+	if (!charBtns.length) buildCharUI();
+	refreshChar();
+}
+function buildCharUI() {
+	let grp = null;
+	for (const o of CHAR_OPTS) {
+		if (o.g !== grp) {
+			grp = o.g;
+			const h = document.createElement('h3');
+			h.textContent = grp;
+			charOptsEl.appendChild(h);
+		}
+		const row = document.createElement('div');
+		row.className = 'char-row';
+		const lab = document.createElement('span');
+		lab.className = 'char-lab';
+		lab.textContent = o.t;
+		const box = document.createElement('div');
+		box.className = 'char-vals';
+		o.v.forEach((val, i) => {
+			const b = document.createElement('button');
+			b.type = 'button';
+			if (o.c && val !== null) {
+				b.className = 'char-sw';
+				b.style.background = Array.isArray(val) ? 'linear-gradient(135deg,' + val[0] + ' 50%,' + val[1] + ' 50%)' : val;
+			} else {
+				b.className = 'char-tx';
+				b.textContent = o.n ? o.n[i] : 'Нет';
+			}
+			b.addEventListener('click', () => {
+				heroCfg[o.k] = val;
+				if (o.k === 'mask' && val) heroCfg.beard = 0;		// под балаклавой бороды не видно
+				applyCharCfg();
+			});
+			box.appendChild(b);
+			charBtns.push({ o, val, b });
+		});
+		row.appendChild(lab);
+		row.appendChild(box);
+		charOptsEl.appendChild(row);
+	}
+}
+function applyCharCfg() {
+	saveCharCur();												// автосохранение текущего облика
+	applyHeroWeapon();
+	applyLook(hero, Object.assign({}, heroCfg));				// сразу красим настоящего бойца — рестарт не нужен
+	refreshChar();
+}
+function refreshChar() {
+	for (const x of charBtns) x.b.classList.toggle('on', heroCfg[x.o.k] === x.val);
+	drawCharPreview();
+}
+function drawCharPreview() {
+	if (!charDummy || charGround !== GROUND) {					// запасной боец только для превью, игру не трогает
+		charDummy = createHero(0);
+		charDummy.gun = 0; charDummy.gunWant = false; charDummy.isPlayer = true;
+		charDummyHealth = makeHealth(false);
+		charGround = GROUND;
+	}
+	charDummy.sniper = heroCfg.weapon === 'sniper';
+	charDummy.mg = heroCfg.weapon === 'mg';
+	applyLook(charDummy, Object.assign({}, heroCfg));
+	const cw = charCv.width, ch = charCv.height;
+	const top = charDummy.p.head.y - 26;						// макушка с запасом под каску
+	const sc = Math.min(2, (ch - 36) / (GROUND - top));		// масштаб: боец целиком влезает в окно
+	const mainCtx = ctx;
+	charCtx.clearRect(0, 0, cw, ch);
+	charCtx.save();
+	charCtx.translate(cw / 2, ch - 16);
+	charCtx.scale(sc, sc);
+	charCtx.translate(-charDummy.p.pelvis.x, -GROUND);
+	ctx = charCtx;
+	try {
+		withUnit({ hero: charDummy, health: charDummyHealth, keys: {} }, drawUnit);
+	} finally {
+		ctx = mainCtx;
+		charCtx.restore();
+	}
+}
+const CHAR_PRESETS = {
+	random: () => { heroCfg = null; return heroLook(); },		// heroLook без heroCfg выдаёт новый случайный облик
+	classic: () => makeLook('hero', lkDeal()),
+	foe: () => makeLook('foe', lkDeal()),
+	medic: () => makeLook('medic', lkDeal()),
+	sniper: () => makeLook('sniper', lkDeal())
+};
+document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
+	const w = heroCfg && heroCfg.weapon;										// пресет меняет внешность, но не оружие
+	heroCfg = charNorm(CHAR_PRESETS[b.dataset.preset]());
+	if (w) heroCfg.weapon = w;
+	applyCharCfg();
+}));
+// ===== Сохранение персонажа и слоты =====
+const CHAR_SLOTS = 3;
+const CHAR_KEY = 'wr_char_cur';								// текущий облик (автосохранение)
+const CHAR_SLOTS_KEY = 'wr_char_slots';						// массив слотов
+const charSlotsEl = document.getElementById('charSlots');
+function lsGet(k) {
+	try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; }
+}
+function lsSet(k, v) {
+	try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* хранилище недоступно */ }
+}
+function saveCharCur() {
+	if (heroCfg) lsSet(CHAR_KEY, heroCfg);
+}
+function loadCharSlots() {
+	const a = lsGet(CHAR_SLOTS_KEY);
+	const out = [];
+	for (let i = 0; i < CHAR_SLOTS; i++) out.push(Array.isArray(a) && a[i] && typeof a[i] === 'object' ? a[i] : null);
+	return out;
+}
+function renderCharSlots() {
+	const slots = loadCharSlots();
+	charSlotsEl.innerHTML = '';
+	slots.forEach((s, i) => {
+		const row = document.createElement('div');
+		row.className = 'char-slot';
+		const lab = document.createElement('span');
+		lab.className = 'char-slot-lab';
+		lab.textContent = 'Слот ' + (i + 1) + (s ? '' : ' — пусто');
+		row.appendChild(lab);
+		const mk = (txt, off, fn) => {
+			const b = document.createElement('button');
+			b.type = 'button';
+			b.className = 'char-act';
+			b.textContent = txt;
+			b.disabled = off;
+			b.addEventListener('click', fn);
+			row.appendChild(b);
+		};
+		mk('Сохранить', false, () => {
+			const a = loadCharSlots();
+			a[i] = Object.assign({}, heroCfg);
+			lsSet(CHAR_SLOTS_KEY, a);
+			renderCharSlots();
+		});
+		mk('Загрузить', !s, () => {
+			heroCfg = charNorm(s);
+			applyCharCfg();
+		});
+		mk('Удалить', !s, () => {
+			const a = loadCharSlots();
+			a[i] = null;
+			lsSet(CHAR_SLOTS_KEY, a);
+			renderCharSlots();
+		});
+		charSlotsEl.appendChild(row);
+	});
+}
+function applyHeroWeapon() {									// ставит оружие из heroCfg; патроны полные только при смене оружия
+	const w = (heroCfg && heroCfg.weapon) || 'ak';
+	const cur = hero.sniper ? 'sniper' : hero.mg ? 'mg' : 'ak';
+	if (cur === w) return;
+	hero.sniper = w === 'sniper';
+	hero.mg = w === 'mg';
+	hero.ammo = magSize(hero);
+	hero.reloadT = 0; hero.magOut = false; hero.magHeld = false; hero.shootCD = 0;
+}
+const savedChar = lsGet(CHAR_KEY);
+if (savedChar && typeof savedChar === 'object') heroCfg = charNorm(savedChar);		// облик из прошлой сессии
+
 hero = createHero(START_X);
 hero.isPlayer = true;
 applyLook(hero, heroLook());
+applyHeroWeapon();
 genWorld();
 genSquad();
 spawnFoeGroups();

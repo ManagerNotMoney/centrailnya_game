@@ -123,7 +123,7 @@ function stepHero() {
 		if (h.blind < 0.01) h.blind = 0;
 	}
 	if (h.isPlayer) {
-		const c = P.chest, reach = h.sniper ? 112 : 80;           // пуля вылетает из дула, а не из груди
+		const c = P.chest, reach = gunReach(h);           // пуля вылетает из дула, а не из груди
 		const near = Math.hypot(mouse.x - c.x, mouse.y - c.y) <= reach + 10;
 		let a = Math.atan2(mouse.y - c.y, mouse.x - c.x);
 		if (!near) {
@@ -262,7 +262,7 @@ function stepHero() {
 			const cc = gunOrigin(h);                                 // откуда считаем хват: грудь или точка над головой
 			const fl = (Math.cos(h.aimA) < 0 ? -1 : 1) * (1 - 2 * ease(h.blind || 0));   // при хвате вслепую оружие перевёрнуто
 			const gx = (lx, ly) => ({ x: cc.x + ax * lx - ay * ly * fl, y: cc.y + ay * lx + ax * ly * fl });
-			const gF = gx(13, 9), gB = reloadHand(h, gx) || gx(41, 2);
+			const gF = h.mg ? gx(34, 10) : gx(13, 9), gB = reloadHand(h, gx) || (h.mg ? gx(52, 2) : gx(41, 2));
 			const txB = gB.x, tyB = gB.y;
 			const txF = gF.x, tyF = gF.y;
 			const armB = ik2(sh, { x: txB, y: tyB }, S.upperArm, S.foreArm, -h.f, true);

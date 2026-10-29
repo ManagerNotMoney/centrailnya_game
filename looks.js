@@ -128,8 +128,44 @@ function dealLooks() {
     applyLook(a.hero, makeLook(role, deal));
   }
 }
+// ===== Настройка героя из меню «Персонаж» =====
+let heroCfg = null;										// облик героя из меню; null — каждый рестарт случайный
+// g — группа, k — поле в look, t — подпись, v — варианты, c — варианты это цвета, n — подписи текстовых вариантов
+const CHAR_OPTS = [
+	{ g: 'Оружие', k: 'weapon', t: 'Оружие', v: ['ak', 'sniper', 'mg'], n: ['АК', 'Снайперка', 'Пулемёт'] },
+	{ g: 'Голова', k: 'skin', t: 'Кожа', v: LOOK_SKIN, c: 1 },
+	{ g: 'Голова', k: 'hair', t: 'Волосы', v: [...LOOK_HAIR, '#7a3a1e', '#d8d4c4'], c: 1 },
+	{ g: 'Голова', k: 'beard', t: 'Борода', v: [0, 1, 2], n: ['Нет', 'Щетина', 'Борода'] },
+	{ g: 'Голова', k: 'mask', t: 'Балаклава', v: [null, ...LOOK_FOE_MASK, '#6b6a45', '#8a3a2e'], c: 1 },
+	{ g: 'Голова', k: 'paint', t: 'Боевой раскрас', v: [null, '#1a1a14', '#8a3a2e', '#c9c4a0'], c: 1 },
+	{ g: 'Голова', k: 'scar', t: 'Шрам', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Голова', k: 'helmet', t: 'Каска', v: [...LOOK_HELMET, '#3a3f47', '#2b2f35'], c: 1 },
+	{ g: 'Голова', k: 'net', t: 'Сетка на каске', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Голова', k: 'band', t: 'Полоса на каске', v: [null, ...LOOK_BAND, HERO_BAND, FOE_BAND], c: 1 },
+	{ g: 'Голова', k: 'goggles', t: 'Очки на каске', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Голова', k: 'glasses', t: 'Очки на лице', v: [null, 'shades', 'clear'], n: ['Нет', 'Тёмные', 'Прозрачные'] },
+	{ g: 'Голова', k: 'headset', t: 'Гарнитура', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Тело', k: 'vest', t: 'Жилет', v: [...LOOK_VEST, '#2f3338', '#25282c'], c: 1 },
+	{ g: 'Тело', k: 'rig', t: 'Разгрузка', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Тело', k: 'bandolier', t: 'Патронташ', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Тело', k: 'scarf', t: 'Шарф', v: [null, ...LOOK_SCARF, '#4a463e', '#3a4048', '#7a6f50', '#56503a'], c: 1 },
+	{ g: 'Тело', k: 'sleeve', t: 'Длинный рукав', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Тело', k: 'glove', t: 'Перчатки', v: [null, ...LOOK_GLOVE, '#222'], c: 1 },
+	{ g: 'Тело', k: 'armband', t: 'Повязка на рукаве', v: [null, FOE_BAND, '#e8e8dc', '#3d5a73', '#c9b36a', '#4d6b3a'], c: 1 },
+	{ g: 'Тело', k: 'armCross', t: 'Крест на повязке', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Ноги', k: 'pants', t: 'Штаны', v: [...LOOK_PANTS, ...LOOK_FOE_PANTS], c: 1 },
+	{ g: 'Ноги', k: 'pantsStyle', t: 'Крой штанов', v: ['plain', 'cargo', 'camo', 'patch'], n: ['Простые', 'Карманы', 'Камуфляж', 'Заплатки'] },
+	{ g: 'Ноги', k: 'boots', t: 'Ботинки', v: [...LOOK_BOOTS, ...LOOK_FOE_BOOTS], c: 1 },
+	{ g: 'Ноги', k: 'puttee', t: 'Обмотки', v: [null, '#8d7f5a', '#7a6f50'], c: 1 },
+	{ g: 'Ноги', k: 'kneePads', t: 'Наколенники', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Ноги', k: 'holster', t: 'Кобура', v: [false, true], n: ['Нет', 'Есть'] },
+	{ g: 'Снаряжение', k: 'pack', t: 'Рюкзак', v: ['none', 'small', 'ruck', 'radio', 'medic'], n: ['Нет', 'Малый', 'Большой', 'Рация', 'Санитарный'] },
+	{ g: 'Снаряжение', k: 'packC', t: 'Цвет рюкзака', v: ['#5d6b45', '#6b5f45', '#4a4f3a', '#56503a', '#3a3d42', '#4a463e', '#34382f'], c: 1 },
+	{ g: 'Снаряжение', k: 'canteen', t: 'Фляга', v: [false, true], n: ['Нет', 'Есть'] }
+];
 function heroLook() {
-  const L = makeLook('rifle', lkDeal());
+	if (heroCfg) return Object.assign({}, heroCfg);		// облик из меню «Персонаж»
+	const L = makeLook('rifle', lkDeal());
   L.role = 'hero';
   L.pants = lkPick(LOOK_PANTS);
   L.band = HERO_BAND;
@@ -241,6 +277,23 @@ function drawHeadLook(cx, cy, rx, ry, ang) {
       ctx.ellipse(-rx * 0.5, ry * 0.45, rx * (L.beard === 1 ? 0.5 : 0.58), ry * 0.8, 0, 0, Math.PI * 2);
       ctx.fill();
     }
+		if (L.paint) {										// боевой раскрас: две полосы на щеке
+			ctx.strokeStyle = L.paint; ctx.lineWidth = 2.2; ctx.lineCap = 'butt';
+			for (let i = 0; i < 2; i++) {
+				ctx.beginPath();
+				ctx.moveTo(-rx * 0.35, ry * 0.72 + i * 3.4); ctx.lineTo(rx * 0.35, ry * 0.72 + i * 3.4);
+				ctx.stroke();
+			}
+		}
+		if (L.scar) {											// шрам через щеку
+			ctx.strokeStyle = '#a85a48'; ctx.lineWidth = 1.2;
+			ctx.beginPath(); ctx.moveTo(-rx * 0.1, ry * 0.5); ctx.lineTo(rx * 0.35, ry * 0.95); ctx.stroke();
+			ctx.strokeStyle = 'rgba(40,10,5,0.5)'; ctx.lineWidth = 0.8;
+			for (const t of [0.3, 0.55, 0.8]) {
+				const sx = lerp(-rx * 0.1, rx * 0.35, t), sy = lerp(ry * 0.5, ry * 0.95, t);
+				ctx.beginPath(); ctx.moveTo(sx - 1.4, sy + 1.4); ctx.lineTo(sx + 1.4, sy - 1.4); ctx.stroke();
+			}
+		}
     ctx.restore();
     if (L.glasses) {                                 // очки на уровне глаза (глаз в drawFace: y = 0.55·ry, x = 0.1·rx)
       const ex = rx * 0.1 + 0.4, ey = ry * 0.55;
@@ -255,8 +308,28 @@ function drawHeadLook(cx, cy, rx, ry, ang) {
 // полоса и очки на каске
 function drawHelmetLook(cx, cy, rx, ry, ang) {
   const L = hero.look;
-  if (!L || !(L.band || L.goggles)) return;
+  if (!L || !(L.band || L.goggles || L.net || L.headset)) return;
   lkHeadFrame(cx, cy, ang, () => {
+		if (L.net) {											// маскировочная сетка с листвой
+			ctx.save();
+			ctx.beginPath(); ctx.ellipse(0, 0, rx + 1.5, ry + 1.5, 0, 0, Math.PI * 2); ctx.clip();
+			for (let i = 0; i < L.camo.length; i++) {
+				const c = L.camo[i];
+				ctx.beginPath();
+				ctx.ellipse(c[0] * rx, c[1] * ry, c[2] * rx * 0.7 + 1.5, c[3] * ry * 0.6 + 1.5, c[4], 0, Math.PI * 2);
+				ctx.fillStyle = i % 2 ? 'rgba(38,52,26,0.85)' : 'rgba(112,128,70,0.85)';
+				ctx.fill();
+			}
+			ctx.restore();
+		}
+		if (L.headset) {										// наушник и микрофон у рта
+			ctx.strokeStyle = '#1f1f1c'; ctx.lineWidth = 1.4;
+			ctx.beginPath(); ctx.moveTo(-1, ry * 0.2); ctx.quadraticCurveTo(-rx * 0.2, ry * 1.1, rx * 0.15, ry * 1.0); ctx.stroke();
+			ctx.fillStyle = '#1f1f1c';
+			ctx.beginPath(); ctx.arc(rx * 0.15, ry * 1.0, 1.6, 0, Math.PI * 2); ctx.fill();
+			ctx.beginPath(); ctx.ellipse(-1, -ry * 0.15, 3.6, 4.4, 0, 0, Math.PI * 2);
+			ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = lkInk; ctx.stroke();
+		}
     if (L.band) {
       ctx.save();
       ctx.beginPath(); ctx.ellipse(0, 0, rx + 1.5, ry + 1.5, 0, 0, Math.PI * 2); ctx.clip();
@@ -340,6 +413,12 @@ function lkCamo(L, s, hl, shift) {                   // пятна камуфл�
 }
 function lkThigh(L, s, k) {
   const st = L.pantsStyle;
+	if (L.holster && k === 'pelvis-kneeF') {				// кобура с пистолетом на ближней ноге
+		lkFrame(s.a, s.b, hl => {
+			lkRect(hl * 0.1, -4.5, 10, 9, '#2b2a24', 2);
+			lkRect(hl * 0.1 + 1.5, -2, 4, 5, '#46453b', 1);
+		});
+	}
   if (st === 'plain') return;
   lkFrame(s.a, s.b, hl => {
     if (st === 'camo') lkCamo(L, s, hl, k === 'pelvis-kneeB' ? 3 : 0);

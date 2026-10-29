@@ -328,10 +328,10 @@ function drawMG() {                                                         // �
 	poly([[84, -2], [84, -8], [88, -8], [88, -2]], '#111');                 // мушка
 	box(50, -8, 14, 3, '#111');                                             // ручка для переноски
 	poly([[30, 5], [38, 5], [36, 15], [29, 15]], '#2a1c10');                // пистолетная рукоять
-	box(4, 5, 22, 13, '#4a4d3a');                                           // короб с лентой
-	box(7, 8, 16, 2, '#33352a');
+	if (!hero.magOut) box(4, 5, 22, 13, '#4a4d3a');                                           // короб с лентой
+	if (!hero.magOut) box(7, 8, 16, 2, '#33352a');
 	ctx.fillStyle = '#c9a24a';                                              // свисающая лента
-	for (let i = 0; i < 4; i++) ctx.fillRect(26 + i * 2.5, 12 + i * 3, 3, 4);
+	if (!hero.magOut) for (let i = 0; i < 4; i++) ctx.fillRect(26 + i * 2.5, 12 + i * 3, 3, 4);
 	ctx.beginPath();
 	ctx.moveTo(18, 5.5); ctx.lineTo(18, 8); ctx.lineTo(28, 8);              // скоба
 	ctx.moveTo(62, 4.5); ctx.lineTo(57, 17); ctx.moveTo(62, 4.5); ctx.lineTo(68, 17);   // сошки
@@ -369,9 +369,10 @@ function drawReloadMag() {                                 // магазин и 
 	ctx.lineWidth = 1.5;
 	ctx.lineJoin = 'round';
 	ctx.strokeStyle = '#111';
-	ctx.fillStyle = h.sniper ? '#2a2a22' : '#1f1f18';
+	ctx.fillStyle = h.mg ? '#4a4d3a' : h.sniper ? '#2a2a22' : '#1f1f18';
 	ctx.beginPath();
-	if (h.sniper) { ctx.moveTo(-3, -6); ctx.lineTo(5, -6); ctx.lineTo(3, 5); ctx.lineTo(-4, 5); }
+	if (h.mg) { ctx.moveTo(-9, -6); ctx.lineTo(9, -6); ctx.lineTo(9, 6); ctx.lineTo(-9, 6); }
+	else if (h.sniper) { ctx.moveTo(-3, -6); ctx.lineTo(5, -6); ctx.lineTo(3, 5); ctx.lineTo(-4, 5); }
 	else { ctx.moveTo(-8, -9); ctx.lineTo(0, -9); ctx.quadraticCurveTo(2, 1, 8, 7); ctx.lineTo(1, 9); ctx.quadraticCurveTo(-6, 2, -8, -9); }
 	ctx.closePath();
 	ctx.fill(); ctx.stroke();
@@ -996,9 +997,10 @@ function drawDust() {
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
     ctx.strokeStyle = '#111';
-    ctx.fillStyle = m.sn ? '#2a2a22' : '#1f1f18';
+    ctx.fillStyle = m.mg ? '#4a4d3a' : m.sn ? '#2a2a22' : '#1f1f18';
     ctx.beginPath();
-    if (m.sn) { ctx.moveTo(-3, -6); ctx.lineTo(5, -6); ctx.lineTo(3, 5); ctx.lineTo(-4, 5); }
+    if (m.mg) { ctx.moveTo(-9, -6); ctx.lineTo(9, -6); ctx.lineTo(9, 6); ctx.lineTo(-9, 6); }
+    else if (m.sn) { ctx.moveTo(-3, -6); ctx.lineTo(5, -6); ctx.lineTo(3, 5); ctx.lineTo(-4, 5); }
     else { ctx.moveTo(-8, -9); ctx.lineTo(0, -9); ctx.quadraticCurveTo(2, 1, 8, 7); ctx.lineTo(1, 9); ctx.quadraticCurveTo(-6, 2, -8, -9); }
     ctx.closePath();
     ctx.fill(); ctx.stroke();
