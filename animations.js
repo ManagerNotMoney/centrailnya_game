@@ -84,6 +84,14 @@ function reachTo(from, t, len) {
   const dx = t.x - from.x, dy = t.y - from.y, d = Math.hypot(dx, dy);
   return d <= len ? t : { x: from.x + dx / d * len, y: from.y + dy / d * len };
 }
+// точка, от которой считается положение оружия: грудь, а при стрельбе «по-сомалийски» — над головой
+function gunOrigin(h) {
+	const c = h.p.chest, k = ease(Math.min(1, h.blind || 0));
+	const sx = h.shX || 0, sy = h.shY || 0;                      // дрожь рук от стрельбы
+	if (k < 0.001) return { x: c.x + sx, y: c.y + sy };
+	const hd = h.p.head, a = h.aimA;
+	return { x: lerp(c.x, hd.x - Math.cos(a) * 16, k) + sx, y: lerp(c.y, hd.y - 16 - Math.sin(a) * 16, k) + sy };
+}
 function mixPose(a, b, u) {
   if (typeof a === 'number') return lerp(a, b, u);
   const o = Array.isArray(a) ? [] : {};
@@ -190,6 +198,12 @@ function bodyFx(h, w, cr, lie) {
   if (h.coverK > 0.02) {
     const ck = ease(h.coverK);
     o.hx += f * 3 * ck; o.hy += 4 * ck; o.cx += f * 3 * ck;
+  }
+  // стрельба вслепую: голова пригнута и отведена назад, пока руки с оружием наверху
+  if (h.blind > 0.01) {
+    const bl = ease(h.blind);
+    o.hx -= f * 5 * bl; o.hy += 7 * bl;
+    o.cx -= f * 3 * bl; o.cy += 2 * bl;
   }
   // попадание: толчок по направлению пули, потом складывается вперёд
   const fl = h.flinch;

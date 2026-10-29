@@ -6,6 +6,9 @@ const CONCUSS_KO = 0.7; // контузия от 70% и выше — боец б
 const PAIN_SHOCK = 0.8; // боль выше 80% — болевой шок: боец без сознания, пока боль не спадёт
 const TOTAL_BLOOD_L = 5;    // 100% крови = 5 литров (только для показа игроку)
 const BLOOD_STEP_L = 0.5;   // показываем примерно, с шагом 500 мл
+const LAST_STAND_L = 1.5;   // ниже этого остатка крови у игрока включается «шанс на выживание»
+const LAST_STAND_MUL = 0.75;   // и кровь вытекает на 25% медленнее
+const LAST_STAND_BLOOD = LAST_STAND_L / TOTAL_BLOOD_L * 100;   // то же в процентах (1,5 л = 30%)
 const WAKE_GRACE = 600; // кадров (10 с): очнувшийся через силу не отключается снова от контузии / шока
 const TORSO_STAND_MIN = 15; // торс разрушен (0%) — встать нельзя, пока он не восстановится хотя бы до 15%
 const LEGS_WALK_MIN = 10;   // ноги в 0% — одна нога волочится, пока ноги не восстановятся хотя бы до 10%
@@ -200,7 +203,8 @@ const makeHealth = (isPlayer) => {
   function update() {
     t++;
     if (state.dead) return;
-    state.blood -= state.bleed / 60;
+    const lastStand = isPlayer && state.blood < LAST_STAND_BLOOD;     // меньше 1,5 л: организм держится, кровь уходит медленнее
+    state.blood -= state.bleed / 60 * (lastStand ? LAST_STAND_MUL : 1);
     state.bleed *= 0.9995;                                    // кровь понемногу сворачивается
     state.pain *= 0.99933;                       // боль проходит в 3 раза медленнее
     for (const part in state.parts) {            // часть тела без открытой раны (перевязана) понемногу восстанавливается
@@ -388,6 +392,7 @@ const makeHealth = (isPlayer) => {
         '<rect class="gear vest" x="20" y="30" width="20" height="22" rx="4"/>' +
       '</svg>' +
       '<div class="st-col">' +
+        '<div class="hd-cap">Боец</div>' +
         '<div class="st-row"><span>Кровь</span><b data-val="blood">≈ 5 л</b></div>' +
         '<div class="bar big"><i data-bar="blood"></i></div>' +
         '<div class="st-row"><span>Каска</span>' + pips('helm') + '</div>' +

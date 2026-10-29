@@ -1,7 +1,23 @@
 'use strict';
-const CALLSIGNS = ['Альфа', 'Браво', 'Чарли', 'Дельта', 'Эхо', 'Фокстрот', 'Гольф', 'Отель', 'Леший', 'Гризли', 'Тень', 'Север', 'Рысь', 'Гром', 'Бес', 'Шмель', 'Кедр', 'Байкал'];
-const CALLSIGNS_SNIPER = ['Ворон', 'Сокол', 'Гриф', 'Кречет', 'Глаз'];
-const CALLSIGNS_MEDIC = ['Айболит', 'Пилюля', 'Склиф', 'Бинт', 'Таблетка'];
+const CALLSIGNS = [
+  'Гранит', 'Базальт', 'Кремень', 'Кварц', 'Рубин', 'Топаз',
+  'Тайфун', 'Шквал', 'Вихрь', 'Буран', 'Молния', 'Туман', 'Заря', 'Мороз',
+  'Барс', 'Рысь', 'Волк', 'Медведь', 'Лось',
+  'Редут', 'Бастион', 'Форпост', 'Корсар', 'Пиранья',
+  'Азимут', 'Компас', 'Радар', 'Сигнал',
+  'Гром', 'Фантом', 'Орион', 'Фрегат', 'Атлас', 'Титан', 'Якорь', 'Клинок', 'Щит'
+];
+const CALLSIGNS_SNIPER = [
+  'Сапсан', 'Чеглок', 'Кобчик', 'Дербник', 'Балобан',
+  'Лунь', 'Скопа', 'Осоед', 'Канюк', 'Сип', 'Орлан', 'Пустельга',
+  'Шёпот', 'Немой', 'Тихий', 'Незримый', 'Дальний',
+  'Оптик', 'Линза', 'Прицел'
+];
+const CALLSIGNS_MEDIC = [
+  'Док', 'Доктор', 'Фельдшер', 'Санитар',
+  'Ангел', 'Белый', 'Лазарь', 'Спасатель',
+  'Знахарь', 'Лекарь', 'Живица'
+];
 function assignCallsigns() {                                 // уникальный позывной каждому, по роли
 	const gen = CALLSIGNS.slice(), sn = CALLSIGNS_SNIPER.slice(), md = CALLSIGNS_MEDIC.slice();
 	for (const a of squad) {
@@ -82,12 +98,13 @@ function genSquad() {
     lieT: 1e9, lieFor: 0, medic: null,          // не ложится «отдыхать» сам
     stopX: FINISH_X, isMedic: 'personal', personal: true
   });
+  dealLooks();
   assignCallsigns();
 }
 function withUnit(u, fn) {
-  const sh = hero, sH = Health;
-  hero = u.hero; Health = u.health;
-  try { return fn(); } finally { hero = sh; Health = sH; }
+  const sh = hero, sH = Health, sk = keys;
+  hero = u.hero; Health = u.health; keys = u.keys || keys;   // у игрока в списке своих keys нет — остаются его клавиши
+  try { return fn(); } finally { hero = sh; Health = sH; keys = sk; }
 }
 function needsHelp(u, byMedic) {
   const st = u.health.state;
@@ -344,24 +361,28 @@ function tintFoe(h, i) {
 }
 // ===== Пулемётчик в доме: сидит у окна, 14 с непрерывно стреляет «в белый свет», 4 с отдыхает =====
 const MG_CHANCE = 0.75;          // шанс, что в доме сидит пулемётчик
-const MG_SIGHT = FIRE_RANGE * 1.4;   // дальность, на которой пулемётчик замечает цель и стреляет (+40%)
+const MG_NEST_CHANCE = 0.05;     // шанс, что группа мешков с песком — пулемётное гнездо
+const MG_SIGHT = FIRE_RANGE * 2.5;   // дальность, на которой пулемётчик замечает цель и стреляет (≈2100 px, дальше экрана)
 const MG_FIRE_T = 14 * 60;      // кадров огня
 const MG_REST_T = 4 * 60;       // кадров отдыха
 const MG_CD = 5;                // кадров между выстрелами (12 в секунду)
+const MG_BULLET_SPEED = 60;     // скорость пули пулемётчика, px/кадр (одинакова по обеим осям)
 const MG_SPREAD = 0.14;         // разброс каждой пули, рад
 const MG_BIAS = 0.22;           // медленно «плывущий» перекос прицела, рад
 function spawnGunners() {
 	for (const c of props) {
-		if (c.type !== 'house' || !c.mg) continue;
-		const side = -1;                                              // только левое окно: стреляет влево, в сторону игрока
-		const x = side < 0 ? c.x + HOUSE_WALL + 30 : c.x + c.w - HOUSE_WALL - 30;
+		const nest = c.type === 'sandbags' && c.nest;                 // гнездо: пулемётчик сидит за мешками
+		if (!nest && (c.type !== 'house' || !c.mg)) continue;
+		const side = -1;                                              // стреляет влево, в сторону игрока
+		const x = nest ? c.x + c.w / 2 : (side < 0 ? c.x + HOUSE_WALL + 30 : c.x + c.w - HOUSE_WALL - 30);
 		spawnFoe(x, foes.length);
 		const e = foes[foes.length - 1];
 		e.hero.ammo = 1e9;                                            // ленту не кончить
+		e.hero.mg = true;                                             // у пулемётчика пулемёт, а не АК
 		Object.assign(e, {
-			gunner: true, house: c, side,
-			wx: side < 0 ? c.x + HOUSE_WALL / 2 : c.x + c.w - HOUSE_WALL / 2,   // середина стены в окне
-			wy: GROUND - (HOUSE_WIN_LO + HOUSE_WIN_HI) / 2,
+			gunner: true, house: c, side, homeX: x,                   // homeX — его пост: возвращается сюда после взрыва
+			wx: nest ? x - 40 : (side < 0 ? c.x + HOUSE_WALL / 2 : c.x + c.w - HOUSE_WALL / 2),   // дом: середина стены в окне; гнездо: ствол над мешками
+			wy: nest ? GROUND - c.h - 14 : GROUND - (HOUSE_WIN_LO + HOUSE_WIN_HI) / 2,
 			mgT: Math.random() * (MG_FIRE_T + MG_REST_T), mgPh: Math.random() * Math.PI * 2, firing: false
 		});
 	}
@@ -373,6 +394,11 @@ function gunnerThink(e) {
 	h.treat = null;
 	combatThink(e);                                                   // инициализация бойца; цель и оружие ниже переопределяем
 	if (st.dead) return;
+	const away = h.p.pelvis.x - e.homeX;                              // взрыв мог отбросить его от окна / мешков
+	e.atPost = Math.abs(away) < 20;
+	if (Math.abs(away) > 8 && st.ko === 0 && !h.getup && h.lie < 0.5 && e.stun <= 0) {
+		if (away > 0) k.KeyA = true; else k.KeyD = true;              // идёт обратно на позицию
+	}
 	e.mgT++;
 	e.firing = e.mgT % (MG_FIRE_T + MG_REST_T) < MG_FIRE_T;          // 14 с огня, 4 с отдыха
 	let best = null, bd = MG_SIGHT;
@@ -394,12 +420,12 @@ function gunnerThink(e) {
 function gunnerShoot(e) {
 	const h = e.hero, st = e.health.state;
 	if (won || st.dead || st.ko > 0 || e.stun > 0 || !e.firing || !e.tgt) return;
-	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5) return;
+	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5 || !e.atPost || h.f !== e.side) return;
 	const t = e.tgt.hero.p.chest;
 	const a = Math.atan2(t.y - e.wy, t.x - e.wx)
 		+ Math.sin(e.mgT * 0.02 + e.mgPh) * MG_BIAS                   // прицел медленно «плывёт»
 		+ (Math.random() - 0.5) * 2 * MG_SPREAD;                      // плюс разброс на каждую пулю
-	bullets.push({ x: e.wx, y: e.wy, px: e.wx, py: e.wy, vx: Math.cos(a) * 60, vy: Math.sin(a) * BULLET_SPEED, life: 90, foe: true, sn: false, mg: true, dmg: 2.5, sx: e.wx });
+	bullets.push({ x: e.wx, y: e.wy, px: e.wx, py: e.wy, vx: Math.cos(a) * MG_BULLET_SPEED, vy: Math.sin(a) * MG_BULLET_SPEED, life: 90, foe: true, sn: false, mg: true, dmg: 2.5, sx: e.wx });
 	flashes.push({ x: e.wx, y: e.wy, a, life: 7, max: 7 });           // пули и вспышка — из окна
 	h.shootCD = MG_CD;
 	h.p.chest.px -= Math.cos(h.aimA) * 1.2; h.p.chest.py -= Math.sin(h.aimA) * 1.2;   // отдача
@@ -410,6 +436,7 @@ function spawnFoe(x, i) {
   h.speedK = 0.65 + Math.random() * 0.6;     // у каждого своя скорость
   h.phase = Math.random() * Math.PI * 2;
   tintFoe(h, i);
+  applyLook(h, foeLook());
   const fh = makeHealth(false);
   fh.state.armor = 0; h.armorOff = true;      // бронежилеты только у наших
   foes.push({ hero: h, health: fh, keys: {}, stun: 0, foe: true });
@@ -435,6 +462,13 @@ function spawnFoeGroups() {
 }
 // цель, по которой стреляют: живой, в сознании, не в болевом шоке (лежачих без сознания не добивают)
 const canTarget = u => { const st = u.health.state; return !st.dead && st.ko === 0 && !st.shock; };
+const BACK_SIGHT = 140;   // врагу за спиной замечают только вплотную (px)
+// враг видит цель впереди, а за спиной (затылком) — только если она совсем рядом; у отряда обзор не ограничен
+function seesTarget(a, u) {
+  if (!a.hero.foe) return true;
+  const dx = u.hero.p.pelvis.x - a.hero.p.pelvis.x;
+  return dx * a.hero.f >= 0 || Math.abs(dx) < BACK_SIGHT;
+}
 // общий «мозг» боя: выбор цели, оружие, прицел (для союзников и врагов)
 function combatThink(a) {
   const h = a.hero, st = a.health.state;
@@ -457,17 +491,20 @@ function combatThink(a) {
   const x = h.p.pelvis.x;
   const lim = h.sniper ? SNIPER_RANGE : SIGHT;
   const list = h.foe ? everyone() : foes;
-  let bd = lim;
+  let bd = lim, alt = null, ad = lim;
   for (const u of list) {
-    if (!canTarget(u)) continue;
+    if (!canTarget(u) || !seesTarget(a, u)) continue;
     const d = Math.abs(u.hero.p.pelvis.x - x);
+    if (u === a.skipU && a.skipT > 0) { if (d < ad) { ad = d; alt = u; } continue; }   // эта цель в укрытии — пробуем другую
     if (d < bd) { bd = d; a.tgt = u; }
   }
+  if (!a.tgt) a.tgt = alt;                                   // других целей нет — возвращаемся к ней
+  if (a.skipT > 0) a.skipT--;
   if ((a.losT = (a.losT || 0) - 1) <= 0) {                   // раз в 8 кадров ищем ближайшую цель, в которую можно попасть
     a.losT = 8; a.vis = null;
     let vd = lim;
     for (const u of list) {
-      if (!canTarget(u)) continue;
+      if (!canTarget(u) || !seesTarget(a, u)) continue;
       const d = Math.abs(u.hero.p.pelvis.x - x);
       if (d >= vd) continue;
       const pt = aimPoint(h.p.chest, u.hero);
@@ -477,6 +514,7 @@ function combatThink(a) {
   if (a.vis && canTarget(a.vis) && Math.abs(a.vis.hero.p.pelvis.x - x) < lim) { a.tgt = a.vis; a.blocked = false; }
   else a.blocked = !!a.tgt;                                  // видит врага, но прострелить нельзя
   a.blockT = a.blocked ? (a.blockT || 0) + 1 : 0;
+  if (a.blockT > 0 && a.blockT % 90 === 0 && a.tgt) { a.skipU = a.tgt; a.skipT = 300; }   // 1,5 с не можем попасть — переключаемся на другую цель на 5 с
   if (a.blockT > 120 && a.coverX != null) { a.coverX = null; a.coverT = 200; }   // 2 с не можем попасть — выходим из укрытия и идём ближе
   if (a.heardT > 0) {                                        // услышал звон каски
     a.heardT--;

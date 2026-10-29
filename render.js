@@ -43,7 +43,8 @@ function drawOval(a, b, ry, ext, color, helmet) {
 
   if (helmet) {
     drawFace(cx, cy, rx, ry, ang);
-    if (Health.state.helmet > 0) drawHelmet(cx, cy, rx, ry, ang);
+    drawHeadLook(cx, cy, rx, ry, ang);
+    if (Health.state.helmet > 0) { drawHelmet(cx, cy, rx, ry, ang); drawHelmetLook(cx, cy, rx, ry, ang); }
   }
 }
 
@@ -112,6 +113,7 @@ function drawHelmet(cx, cy, rx, ry, ang) {
 function drawUnit() {
 	const held = hero.gun >= 0.5;
 	drawShadow();
+	drawBackpack();
 	if (!held) drawRifle();
 	for (let si = 0; si < hero.segs.length; si++) {
 		const s = hero.segs[si];
@@ -119,6 +121,7 @@ function drawUnit() {
 		drawOval(hero.p[s.a], hero.p[s.b], s.ry, s.ext, s.c, s.helmet);
 		if (s.a === 'pelvis' && s.b === 'chest' && Health.state.armor > 0) drawVest(s);
 		if (s.a === 'pelvis' && s.b === 'chest' && hero.isMedic) drawMedicCross(s);
+		drawLookSeg(s);
 		drawWounds(si, s);
 		drawBand(s, si);
 		if (s.b === 'wristB' && hero.reloadT > 0 && hero.magHand) drawReloadMag();   // магазин в ладони дальней руки: за телом и за оружием
@@ -218,14 +221,15 @@ function drawRifle() {
 	const nx = uy * h.f, ny = -ux * h.f;
 	const sx = lerp(p.x, c.x, 0.5) + nx * 20, sy = lerp(p.y, c.y, 0.5) + ny * 20;
 	const sa = Math.atan2(uy, ux) + (STOW_MUZZLE_DOWN ? Math.PI + h.f * 0.45 : -h.f * 0.45);
-	const x = lerp(sx, c.x, e), y = lerp(sy, c.y, e);
+	const go = gunOrigin(h);
+	const x = lerp(sx, go.x, e), y = lerp(sy, go.y, e);
 	const a = lerpAng(sa, h.aimA, e);
 	const sc = lerp(0.85, 1, e);
 	const pivot = lerp(31, 0, e);
-	const kick = h.shootCD / (h.sniper ? SNIPER_CD : SHOOT_CD) * 3 * e;
+	const kick = h.shootCD / (h.sniper ? SNIPER_CD : h.mg ? MG_CD : SHOOT_CD) * 3 * e;
 	const heldFlip = Math.cos(h.aimA) < 0 ? -1 : 1;
 	const stowFlip = (h.f < 0 ? -1 : 1) * (STOW_MUZZLE_DOWN ? -1 : 1);
-	const flip = lerp(stowFlip, heldFlip, e);
+	const flip = lerp(stowFlip, heldFlip, e) * (1 - 2 * ease(h.blind || 0));   // стрельба вслепую: оружие перевёрнуто магазином вверх
 	const cs = Math.cos(a), sn = Math.sin(a);
 	let maxY = -1e9;
 	for (const [lx, ly] of [[-18, 8], [-18, -6], [80, 3], [80, -3], [42, 22], [10, 16]]) {
@@ -237,7 +241,7 @@ function drawRifle() {
 	ctx.rotate(a);
 	ctx.scale(sc, sc * flip);
 	ctx.translate(-pivot - kick, 0);
-	if (h.sniper) drawSniperRifle(); else drawAK();
+	if (h.sniper) drawSniperRifle(); else if (h.mg) drawMG(); else drawAK();
 	ctx.restore();
 }
 function drawSniperRifle() {
@@ -301,6 +305,38 @@ function drawAK() {
 	ctx.moveTo(18, 4.5); ctx.lineTo(18, 8); ctx.lineTo(25, 8); ctx.lineTo(25, 4.5);
 	ctx.stroke();
 }
+function drawMG() {                                                         // ручной пулемёт: кожух ствола с прорезями, сошки, короб с лентой
+	ctx.lineWidth = 1.5;
+	ctx.lineJoin = 'round';
+	ctx.strokeStyle = '#111';
+	const box = (x, y, w, hh, col) => { ctx.fillStyle = col; ctx.fillRect(x, y, w, hh); ctx.strokeRect(x, y, w, hh); };
+	const poly = (pts, col) => {
+		ctx.beginPath();
+		ctx.moveTo(pts[0][0], pts[0][1]);
+		for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+		ctx.closePath();
+		ctx.fillStyle = col; ctx.fill(); ctx.stroke();
+	};
+	poly([[-22, -5], [-3, -4], [-3, 5], [-10, 10], [-22, 8]], '#4d3a22');   // приклад
+	box(-3, -5, 46, 10, '#2c2e26');                                         // ствольная коробка
+	box(2, -8, 30, 3, '#3a3c32');                                           // крышка коробки
+	box(40, -4.5, 30, 9, '#34362c');                                        // кожух ствола
+	ctx.fillStyle = '#0d0d0a';
+	for (let i = 0; i < 5; i++) ctx.fillRect(44 + i * 5.5, -2, 2.5, 4);     // прорези охлаждения
+	box(68, -2, 36, 4, '#1c1c1c');                                          // ствол
+	box(100, -3.5, 7, 7, '#111');                                           // пламегаситель
+	poly([[84, -2], [84, -8], [88, -8], [88, -2]], '#111');                 // мушка
+	box(50, -8, 14, 3, '#111');                                             // ручка для переноски
+	poly([[30, 5], [38, 5], [36, 15], [29, 15]], '#2a1c10');                // пистолетная рукоять
+	box(4, 5, 22, 13, '#4a4d3a');                                           // короб с лентой
+	box(7, 8, 16, 2, '#33352a');
+	ctx.fillStyle = '#c9a24a';                                              // свисающая лента
+	for (let i = 0; i < 4; i++) ctx.fillRect(26 + i * 2.5, 12 + i * 3, 3, 4);
+	ctx.beginPath();
+	ctx.moveTo(18, 5.5); ctx.lineTo(18, 8); ctx.lineTo(28, 8);              // скоба
+	ctx.moveTo(62, 4.5); ctx.lineTo(57, 17); ctx.moveTo(62, 4.5); ctx.lineTo(68, 17);   // сошки
+	ctx.stroke();
+}
 function drawSling() {
 	const h = hero, P = h.p;
 	const a = 1 - ease(h.gun);
@@ -340,7 +376,7 @@ function drawReloadMag() {                                 // магазин и 
 	ctx.closePath();
 	ctx.fill(); ctx.stroke();
 	ctx.restore();
-	ctx.fillStyle = COLORS.skinDark;                       // пальцы поверх магазина
+	ctx.fillStyle = handColor(true);                       // пальцы поверх магазина
 	ctx.beginPath();
 	ctx.arc(w.x, w.y, 4, 0, Math.PI * 2);
 	ctx.fill(); ctx.stroke();
@@ -348,7 +384,7 @@ function drawReloadMag() {                                 // магазин и 
 function drawHands() {
 	const h = hero;
 	if (h.lie > 0.6 || h.bal < 0.6 || h.gun < 1) return;
-	ctx.fillStyle = COLORS.skin;
+	ctx.fillStyle = handColor(false);
 	ctx.strokeStyle = '#111';
 	ctx.lineWidth = 2;
 	ctx.beginPath();
@@ -780,7 +816,7 @@ function drawHandGrenade() {
 	ctx.fillStyle = '#888';
 	ctx.fillRect(-2, -13, 4, 4);
 	ctx.restore();
-	ctx.fillStyle = COLORS.skin;                           // пальцы поверх гранаты
+	ctx.fillStyle = handColor(false);                           // пальцы поверх гранаты
 	ctx.strokeStyle = '#111';
 	ctx.lineWidth = 2;
 	ctx.beginPath();
@@ -1436,16 +1472,59 @@ function drawGroundDetails() {
     }
   }
   for (let m = 1000; m < FINISH_X; m += 1000) {
-    if (!onScreen(m - 30, 60)) continue;
+    const n = m / 1000, hs = k => hash(n * k + worldSeed);
+    if (hs(11.3) < 0.4) continue;                                    // часть табличек «потеряна»: не на каждом отрезке
+    const x = m + (hs(3.9) - 0.5) * 420;                             // стоят не строго через равные промежутки
+    if (!onScreen(x - 50, 100)) continue;
+    const [bg, fg] = [
+      ['#c9c4a0', '#222'],                                           // светлая
+      ['#7f8a5c', '#e8ecd0'],                                        // армейская зелёная
+      ['#a8a69a', '#2a2a24'],                                        // серая, выцветшая
+      ['#9c6b44', '#f0e2c4']                                         // ржавая
+    ][Math.floor(hs(5.7) * 4)];
+    const txt = Math.round((FINISH_X - x) / 10) + ' м';              // считаем от реального положения таблички
+    const w = 40 + hs(7.1) * 14, bh = 16 + hs(2.3) * 5, ph = 36 + hs(8.9) * 12;
+    const tilt = (hs(4.4) - 0.5) * 0.22 * (hs(6.1) < 0.5 ? 1 : 0.3); // иногда покосилась
+    const y0 = -(ph + bh - 4);                                       // верх таблички относительно основания столба
+    ctx.save();
+    ctx.translate(x, GROUND + 2);
+    ctx.rotate(tilt);
     ctx.fillStyle = '#2a2a22';
-    ctx.fillRect(m, GROUND - 40, 3, 42);
-    ctx.fillStyle = '#c9c4a0';
-    ctx.fillRect(m - 20, GROUND - 56, 44, 18);
-    ctx.fillStyle = '#222';
-    ctx.font = 'bold 11px system-ui, Arial, sans-serif';
+    if (w > 49) {                                                    // широкая — на двух столбах
+      ctx.fillRect(-w * 0.3 - 1.5, -ph, 3, ph);
+      ctx.fillRect(w * 0.3 - 1.5, -ph, 3, ph);
+    } else {
+      ctx.fillRect(-1.5, -ph, 3, ph);
+    }
+    ctx.beginPath();                                                 // табличка (у части — отбит угол)
+    ctx.moveTo(-w / 2, y0);
+    ctx.lineTo(w / 2, y0);
+    if (hs(3.3) < 0.2) {
+      ctx.lineTo(w / 2, y0 + bh * 0.45);
+      ctx.lineTo(w / 2 - w * 0.18, y0 + bh);
+    } else {
+      ctx.lineTo(w / 2, y0 + bh);
+    }
+    ctx.lineTo(-w / 2, y0 + bh);
+    ctx.closePath();
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (hs(1.7) < 0.35) {                                            // пулевые отверстия
+      ctx.fillStyle = '#15150f';
+      for (let j = 0; j < 2 + Math.floor(hs(9.9) * 2); j++) {
+        ctx.beginPath();
+        ctx.arc((hash(n * 13 + j * 7.1 + worldSeed) - 0.5) * (w - 10), y0 + 4 + hash(n * 17 + j * 3.3 + worldSeed) * (bh - 8), 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.fillStyle = fg;
+    ctx.font = 'bold ' + (txt.length > 5 ? 10 : 11) + 'px system-ui, Arial, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(Math.round((FINISH_X - m) / 10) + ' м', m + 2, GROUND - 43);
-    ctx.textAlign = 'left';
+    ctx.fillText(txt, 0, y0 + bh / 2 + 4);
+    ctx.restore();                                                   // вместе с ним вернётся textAlign
   }
 }
 function bagRow(x, y, w, seed) {
@@ -1548,7 +1627,7 @@ function drawMinimap() {
 }
 // ===== Экран гибели / победы =====
 const END_SRC = {
-  rifle: 'вражеский стрелок', sniper: 'вражеский снайпер', mg: 'пулемётчик в доме', ricochet: 'рикошет',
+  rifle: 'вражеский стрелок', sniper: 'вражеский снайпер', mg: 'вражеский пулемётчик', ricochet: 'рикошет',
   strafe: 'налёт авиации', rocket: 'ракетный удар', mega: 'сверхмощная ракета', grenade: 'своя граната'
 };
 const END_PART = { head: 'голова', torso: 'торс', arms: 'рука', legs: 'нога' };

@@ -251,16 +251,25 @@ let ammoShown = '';
 function updateAmmoHud() {
   const h = hero;
   const pr = h.reloadT > 0 ? Math.round((1 - h.reloadT / h.reloadMax) * 20) : -1;
-  const key = h.ammo + '|' + pr + '|' + (h.gunWant ? 1 : 0) + '|' + (h.magOut ? 1 : 0) + '|' + (h.bandWant ? 1 : 0);
+  const bl = h.blind > 0.5 ? 1 : 0;
+  const key = h.ammo + '|' + pr + '|' + (h.gunWant ? 1 : 0) + '|' + (h.magOut ? 1 : 0) + '|' + (h.bandWant ? 1 : 0) + '|' + bl;
   if (key === ammoShown) return;
   ammoShown = key;
-  const bar = pr >= 0 ? '<span class="rl"><i style="width:' + pr * 5 + '%"></i></span>' : '';
-  const hint = h.bandWant ? '<span class="am-h">бинт · <kbd>ЛКМ</kbd> перевязка</span>'
-    : !h.gunWant ? '<span class="am-h">оружие убрано · <kbd>1</kbd></span>'
+  const size = magSize(h);
+  const bar = pr >= 0
+    ? '<div class="am-bar rld"><i style="width:' + pr * 5 + '%"></i></div>'
+    : '<div class="am-bar"><i style="width:' + Math.round(h.ammo / size * 100) + '%"></i></div>';
+  const hint = h.bandWant ? '<span class="am-h">бинт · <kbd>ЛКМ</kbd></span>'
+    : !h.gunWant ? '<span class="am-h">убрано · <kbd>1</kbd></span>'
     : h.reloadT > 0 ? '<span class="am-h">перезарядка…</span>'
-    : (h.ammo === 0 || h.magOut) ? '<span class="am-h bad"><kbd>R</kbd> перезарядка</span>' : '';
-  ammoEl.innerHTML = '<kbd>АК</kbd><b>' + h.ammo + '</b><span class="am-max">/ ' + magSize(h) + '</span>' + hint + bar;
+    : (h.ammo === 0 || h.magOut) ? '<span class="am-h bad"><kbd>R</kbd> перезарядка</span>'
+    : bl ? '<span class="am-h blind">вслепую</span>' : '';
+  const name = h.sniper ? 'Снайперка' : h.mg ? 'Пулемёт' : 'АК';
+  ammoEl.innerHTML = '<div class="hd-ic"><svg viewBox="0 0 24 24"><path d="M3 11h12l1.5-2H21v3h-4.5l-1 1.5H12l-.8 4H8l.8-4H3z"/></svg></div>' +
+    '<div class="am-main"><div class="hd-cap">' + name + '</div>' +
+    '<div class="am-num"><b>' + h.ammo + '</b><span class="am-max">/ ' + size + '</span>' + hint + '</div>' + bar + '</div>';
   ammoEl.classList.toggle('empty', h.ammo === 0 && !(h.reloadT > 0));
+  ammoEl.classList.toggle('low', h.ammo > 0 && h.ammo <= size * 0.25);
 }
 function throwGrenade(x, y, vx, vy) {
   grenades.push({
@@ -285,7 +294,8 @@ function updateNadeHud() {
   nadeShown = nades;
   let pips = '';
   for (let i = 0; i < NADE_MAX; i++) pips += '<i' + (i < nades ? ' class="on"' : '') + '></i>';
-  nadeEl.innerHTML = '<kbd>ПКМ</kbd><span class="ng">' + pips + '</span>';
+  nadeEl.innerHTML = '<div class="hd-ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="6"/><path d="M10 8V5h4v3M14 5l4-2M9.5 14h5"/></svg></div>' +
+    '<div class="am-main"><div class="hd-cap"><span>Гранаты</span><kbd>ПКМ</kbd></div><span class="ng">' + pips + '</span></div>';
   nadeEl.classList.toggle('empty', nades === 0);
 }
 function nadeTarget(h) {                                   // точка падения: курсор, но не дальше NADE_RANGE
@@ -390,12 +400,31 @@ function distToSeg(px, py, a, b) {
   const t = Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / l2));
   return Math.hypot(px - (a.x + dx * t), py - (a.y + dy * t));
 }
-function hitShard(s, seg, u) {
-  for (const n of [seg.a, seg.b]) {
-    const p = u.hero.p[n];
-    p.px -= s.vx * 0.15;
-    p.py -= s.vy * 0.15;
+// обход тел: снаряд в точке (x, y) попал в сегмент бойца из units (pad — запас к радиусу сегмента).
+// fn(u, h, seg): true — снаряд израсходован, обход заканчивается; false — идём к следующему бойцу
+function hitBody(units, x, y, pad, fn) {
+  for (const u of units) {
+    const h = u.hero;
+    if (Math.abs(x - h.p.pelvis.x) > 170) continue;
+    for (const seg of h.segs) {
+      if (distToSeg(x, y, h.p[seg.a], h.p[seg.b]) < seg.ry * 0.8 + pad) {
+        if (fn(u, h, seg)) return true;
+        break;
+      }
+    }
   }
+  return false;
+}
+function kickSeg(h, seg, vx, vy, k) {                      // толчок обоим суставам сегмента по ходу снаряда
+  for (const n of [seg.a, seg.b]) { h.p[n].px -= vx * k; h.p[n].py -= vy * k; }
+}
+function shardPasses(s, h) {                               // осколок пролетает над лежащим бойцом: решение один раз на бойца
+  s.pass = s.pass || new Map();
+  if (!s.pass.has(h)) s.pass.set(h, Math.random() < h.lie * 0.6);
+  return s.pass.get(h);
+}
+function hitShard(s, seg, u) {
+  kickSeg(u.hero, seg, s.vx, s.vy, 0.15);
   u.health.onShrapnel(seg.b, 1, { src: blastSrc, how: 'frag', by: blastBy });
   addWound(u, seg, s.x, s.y, 'frag', s.vx, s.vy);
 }
@@ -409,21 +438,11 @@ function updateShards() {
       s.x += s.vx / 2;
       s.y += s.vy / 2;
       if (s.y >= GROUND || s.x < 0 || s.x > WORLD_W || shardBlocked(s.x, s.y)) { dead = true; break; }
-      for (const u of everybody()) {
-        const h = u.hero;
-        if (Math.abs(s.x - h.p.pelvis.x) > 170) continue;
-        for (const seg of h.segs) {
-          if (distToSeg(s.x, s.y, h.p[seg.a], h.p[seg.b]) < seg.ry * 0.8) {
-            s.pass = s.pass || new Map();
-            if (!s.pass.has(h)) s.pass.set(h, Math.random() < h.lie * 0.6);
-            if (s.pass.get(h)) continue;
-            hitShard(s, seg, u);
-            dead = true;
-            break;
-          }
-        }
-        if (dead) break;
-      }
+      if (hitBody(everybody(), s.x, s.y, 0, (u, h, seg) => {
+        if (shardPasses(s, h)) return false;
+        hitShard(s, seg, u);
+        return true;
+      })) dead = true;
     }
     if (dead) shards.splice(i, 1);
   }
@@ -451,32 +470,20 @@ function updateBigShards() {
       s.x += s.vx / 2;
       s.y += s.vy / 2;
       if (s.y >= GROUND || s.x < 0 || s.x > WORLD_W || shardBlocked(s.x, s.y)) { dead = true; break; }
-      for (const u of everybody()) {
-        const h = u.hero;
-        if (Math.abs(s.x - h.p.pelvis.x) > 170) continue;
-        for (const seg of h.segs) {
-          if (distToSeg(s.x, s.y, h.p[seg.a], h.p[seg.b]) < seg.ry * 0.8 + 3) {
-            s.pass = s.pass || new Map();
-            if (!s.pass.has(h)) s.pass.set(h, Math.random() < h.lie * 0.6);
-            if (s.pass.get(h)) continue;
-            for (const n of [seg.a, seg.b]) {
-              h.p[n].px -= s.vx * 0.25;
-              h.p[n].py -= s.vy * 0.25;
-            }
-            u.health.onShrapnel(seg.b, BIG_SHARD_DMG, { src: blastSrc, how: 'frag', by: blastBy });
-            addWound(u, seg, s.x, s.y, 'embed', s.vx, s.vy);
-            dead = true;
-            break;
-          }
-        }
-        if (dead) break;
-      }
+      if (hitBody(everybody(), s.x, s.y, 3, (u, h, seg) => {
+        if (shardPasses(s, h)) return false;
+        kickSeg(h, seg, s.vx, s.vy, 0.25);
+        u.health.onShrapnel(seg.b, BIG_SHARD_DMG, { src: blastSrc, how: 'frag', by: blastBy });
+        addWound(u, seg, s.x, s.y, 'embed', s.vx, s.vy);
+        return true;
+      })) dead = true;
     }
     if (dead) bigShards.splice(i, 1);
   }
 }
 function shootUnit(h) {
 	if (h.shootCD > 0 || h.gun < 1 || h.getup || h.lie > 0.5 || h.bal < 0.5 || h.bandaging || h.carrying || h.nadeAim || h.throwT > 0) return;
+	if (h.blind > 0.02 && h.blind < 0.8) return;                     // оружие ещё поднимается / опускается
 	if (h.ammo <= 0 || h.magOut || (h.reloadT > 0 && h.reloadT > h.reloadMax * (1 - MAG_IN_AT))) return;   // после вставки магазина стреляем, не дожидаясь, пока рука вернётся на цевьё
 	h.shootCD = h.sniper ? SNIPER_CD : SHOOT_CD;
 	h.ammo--;
@@ -484,12 +491,15 @@ function shootUnit(h) {
 	const ax = Math.cos(h.aimA), ay = Math.sin(h.aimA);
 	const sn = !!h.sniper;
 	const reach = sn ? 112 : 80;
-	const mx = h.p.chest.x + ax * reach;
-	const my = h.p.chest.y + ay * reach;
-	const sa = h.aimA + (Math.random() - 0.5) * 2 * (h.spread || 0);   // разброс у ботов
+	const go = gunOrigin(h);                                           // грудь, а при стрельбе вслепую — точка над головой
+	const mx = go.x + ax * reach;
+	const my = go.y + ay * reach;
+	const shakeSpread = h === hero ? 0.05 * (h.handShake || 0) : 0;   // дрожащие руки уводят ствол
+	const sa = h.aimA + (Math.random() - 0.5) * 2 * ((h.spread || 0) + 0.12 * (h.blind || 0) + shakeSpread);   // разброс у ботов + вслепую + дрожь рук
 	const spd = sn ? SNIPER_SPEED : BULLET_SPEED;
 	bullets.push({ x: mx, y: my, px: mx, py: my, vx: Math.cos(sa) * spd, vy: Math.sin(sa) * spd, life: sn ? 70 : 90, foe: !!h.foe, sn, dmg: sn ? SNIPER_DMG : 2.5, sx: mx, by: h === hero ? 'player' : h.foe ? 'enemy' : 'squad' });
 	flashes.push({ x: mx, y: my, a: h.aimA, life: 7, max: 7 });
+	h.handShake = Math.min(1.6, (h.handShake || 0) + (sn ? 0.9 : 0.5) + 0.5 * (h.blind || 0));   // руки трясутся от стрельбы, вслепую сильнее
 	// отдача: толкаем корпус и таз назад
 	const rec = sn ? 3 : 1;
 	h.p.chest.px -= ax * 1.6 * rec; h.p.chest.py -= ay * 1.6 * rec;
@@ -617,7 +627,7 @@ function bulletHitUnit(b, u, seg) {
 			}
 		}
 	}
-	for (const n of [seg.a, seg.b]) { h.p[n].px -= b.vx * 0.06; h.p[n].py -= b.vy * 0.06; }
+	kickSeg(h, seg, b.vx, b.vy, 0.06);
 	u.health.onShrapnel(seg.b, dmg, info);                           // винтовочная пуля: ×2.5 от осколка
 	addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
 	if (armored || (b.pen || 0) >= PEN_MAX) return 0;          // броня и каска пулю останавливают
@@ -645,6 +655,8 @@ function whizzCheck(b) {
 	hitReact(hero, 'head', b.vx, b.vy, 0.12 + 0.3 * near);             // чуть дёрнулся
 	shake = Math.max(shake, 0.6 + 1.2 * near);
 }
+const MISS_FOE = 0.05;      // шанс, что пуля пролетит сквозь врага без попадания
+const MISS_FRIEND = 0.10;   // то же для игрока и бойцов отряда
 function updateBullets() {
 	if (whizzCD > 0) whizzCD--;
 	for (let i = bullets.length - 1; i >= 0; i--) {
@@ -664,20 +676,16 @@ function updateBullets() {
 				break;
 			}
 			let bounced = false;
-			for (const u of targets) {
-				if (u.health.state.dead) continue;
-				const h = u.hero;
-				if (b.hit && b.hit.has(h)) continue;           // этого бойца пуля уже прошила / задела
-				if (Math.abs(b.x - h.p.pelvis.x) > 170) continue;
-				for (const seg of h.segs) {
-					if (distToSeg(b.x, b.y, h.p[seg.a], h.p[seg.b]) < seg.ry * 0.8 + 2) {
-						const r = bulletHitUnit(b, u, seg);
-						if (r === 0) dead = true; else if (r === 2) bounced = true;
-						break;
-					}
+			hitBody(targets, b.x, b.y, 2, (u, h, seg) => {
+				if (u.health.state.dead || (b.hit && b.hit.has(h))) return false;   // мёртвых и уже задетых этой пулей пропускаем
+				if (Math.random() < (h.foe ? MISS_FOE : MISS_FRIEND)) {             // промах: пуля летит дальше, эту цель больше не проверяет
+					(b.hit = b.hit || new Set()).add(h);
+					return false;
 				}
-				if (dead || bounced) break;
-			}
+				const r = bulletHitUnit(b, u, seg);
+				if (r === 0) dead = true; else if (r === 2) bounced = true;
+				return dead || bounced;
+			});
 			if (dead || bounced) break;
 		}
 		if (!dead && (b.foe || b.rc)) whizzCheck(b);      // вражеская или отрикошетившая пуля прошла мимо — свист
@@ -1021,23 +1029,12 @@ function updateStrafe() {
       b.y += b.vy / 3;
       if (b.y >= GROUND) { strafeImpact(b.x); dead = true; break; }
       if (b.x < 0 || b.x > WORLD_W || shardBlocked(b.x, b.y)) { dead = true; break; }
-      for (const u of everybody()) {
-        const h = u.hero;
-        if (Math.abs(b.x - h.p.pelvis.x) > 170) continue;
-        for (const seg of h.segs) {
-          if (distToSeg(b.x, b.y, h.p[seg.a], h.p[seg.b]) < seg.ry * 0.8 + 2) {
-            for (const n of [seg.a, seg.b]) {
-              h.p[n].px -= b.vx * 0.05;
-              h.p[n].py -= b.vy * 0.05;
-            }
-            u.health.onShrapnel(seg.b, 1, { src: 'strafe', how: 'bullet', by: 'enemy' });
-            addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
-            dead = true;
-            break;
-          }
-        }
-        if (dead) break;
-      }
+      if (hitBody(everybody(), b.x, b.y, 2, (u, h, seg) => {
+        kickSeg(h, seg, b.vx, b.vy, 0.05);
+        u.health.onShrapnel(seg.b, 1, { src: 'strafe', how: 'bullet', by: 'enemy' });
+        addWound(u, seg, b.x, b.y, 'bullet', b.vx, b.vy);
+        return true;
+      })) dead = true;
     }
     if (!dead) whizzCheck(b);
     if (dead || b.y > H + 200) strafeShots.splice(i, 1);
@@ -1073,6 +1070,7 @@ function genWorld() {
     p.x = x;
     p.s = rnd() * 1000;
     if (p.type === 'house') p.mg = Math.random() < MG_CHANCE;   // в доме сидит пулемётчик
+    if (p.type === 'sandbags') p.nest = Math.random() < MG_NEST_CHANCE;   // 5%: за мешками сидит пулемётчик
     props.push(p);
     x += p.w + 220 + rnd() * 420;
   }
@@ -1164,6 +1162,7 @@ function update() {
 }
 window.addEventListener('keydown', (e) => {
   if (inMenu) return;
+  if (e.code === 'Space') e.preventDefault();
   keys[e.code] = true;
   if (!e.repeat && (e.code === 'KeyA' || e.code === 'KeyD' || e.code === 'ArrowLeft' || e.code === 'ArrowRight') && !playerHealth.state.dead && playerHealth.state.ko > 0) {
     hero.struggle = Math.min(STRUGGLE_NEED + 3, (hero.struggle || 0) + 1);   // частые нажатия A/D — боец пытается очнуться
@@ -1220,6 +1219,7 @@ canvas.addEventListener('contextmenu', (e) => {
 function resetGame() {
   hero = createHero(START_X);
   hero.isPlayer = true;
+applyLook(hero, heroLook());
   won = false;
   camX = 0;
   genWorld();
@@ -1272,29 +1272,53 @@ const menuEl = document.getElementById('menu');
 const playBtn = document.getElementById('btnPlay');
 let inMenu = true;
 let started = false;
+let leaving = false;                                       // идёт анимация выхода из меню
+let leaveTimers = [];
 function startPlay() {
-  inMenu = false;
-  menuEl.classList.add('gone');
-  document.body.classList.remove('in-menu');
-  if (!started) {
-    started = true;
-    hudEl.classList.remove('hidden');
-    helpTimer = setTimeout(() => hudEl.classList.add('hidden'), 15000);   // подсказка сама прячется через 15 с
-  }
+  if (leaving) return;
+  leaving = true;
+  menuEl.classList.add('leaving');                         // 1) «выключение экрана»: контент схлопывается в линию
+  leaveTimers = [
+    setTimeout(() => {                                     // 2) игра стартует под затухающим меню
+      inMenu = false;
+      document.body.classList.add('starting');             // картинка игры проявляется из темноты
+      if (!started) {
+        started = true;
+        hudEl.classList.remove('hidden');
+        helpTimer = setTimeout(() => hudEl.classList.add('hidden'), 15000);   // подсказка сама прячется через 15 с
+      }
+    }, 500),
+    setTimeout(() => {                                     // 3) меню убираем совсем
+      menuEl.classList.add('gone');
+      menuEl.classList.remove('leaving');
+      document.body.classList.remove('in-menu');
+      leaving = false;
+    }, 1100),
+    setTimeout(() => document.body.classList.remove('starting'), 1700)
+  ];
 }
 function openMenu() {
+  leaveTimers.forEach(clearTimeout);                       // отменяем анимацию входа, если она ещё идёт
+  leaving = false;
+  menuEl.classList.remove('leaving');
+  document.body.classList.remove('starting');
   inMenu = true;
   mouseDown = false;
   hero.nadeAim = false;
   for (const k in keys) keys[k] = false;
-  playBtn.textContent = 'Продолжить';
+  playBtn.querySelector('span').textContent = 'Продолжить';
   menuEl.classList.remove('gone');
   document.body.classList.add('in-menu');
 }
 playBtn.addEventListener('click', startPlay);
-document.getElementById('btnKeys').addEventListener('click', toggleHelp);
+const keysBtn = document.getElementById('btnKeys');
+keysBtn.addEventListener('click', () => {
+  const on = menuEl.classList.toggle('show-keys');      // «Что в игре» ⇄ «Управление»
+  keysBtn.classList.toggle('active', on);
+});
 hero = createHero(START_X);
 hero.isPlayer = true;
+applyLook(hero, heroLook());
 genWorld();
 genSquad();
 spawnFoeGroups();

@@ -117,6 +117,12 @@ function stepHero() {
     else h.bal = Math.min(1, h.bal + 0.02 * (1 - Health.state.concussion * 0.6));
   }
 	if (h.isPlayer) {
+		const canBlind = keys.Space && h.gunWant && h.gun > 0.5 && h.crouch > 0.5 && h.lie < 0.3 && h.bal > 0.6
+			&& !h.getup && !h.bandaging && !h.treat && !h.nadeAim && !(h.throwT > 0) && !h.carrying && Health.conscious();
+		h.blind = (h.blind || 0) + ((canBlind ? 1 : 0) - (h.blind || 0)) * 0.14;
+		if (h.blind < 0.01) h.blind = 0;
+	}
+	if (h.isPlayer) {
 		const c = P.chest, reach = h.sniper ? 112 : 80;           // пуля вылетает из дула, а не из груди
 		const near = Math.hypot(mouse.x - c.x, mouse.y - c.y) <= reach + 10;
 		let a = Math.atan2(mouse.y - c.y, mouse.x - c.x);
@@ -129,6 +135,11 @@ function stepHero() {
 		const MAX_DOWN = 65 * D2R;                               // вниз не круче 65°, вверх без ограничения
 		const el = Math.atan2(Math.sin(a), Math.abs(Math.cos(a)));   // угол над/под горизонтом, вниз положительный
 		if (el > MAX_DOWN) a = Math.cos(a) < 0 ? Math.PI - MAX_DOWN : MAX_DOWN;
+		if (h.blind > 0.001) {                                   // вслепую: ствол почти горизонтален (вниз ≤ 11°, вверх ≤ 29°)
+			const e2 = Math.atan2(Math.sin(a), Math.abs(Math.cos(a)));
+			const cl = Math.max(lerp(-Math.PI / 2, -0.5, h.blind), Math.min(lerp(MAX_DOWN, 0.2, h.blind), e2));
+			a = Math.cos(a) < 0 ? Math.PI - cl : cl;
+		}
 		h.aimA = a;
 	} else {
 		h.aimA = h.aimWant != null ? h.aimWant : (h.f > 0 ? 0 : Math.PI);
@@ -155,6 +166,10 @@ function stepHero() {
 	const gunSpd = (h.nadeAim || h.throwT > 0) ? 0.12 : (h.gunWant || inControl ? 0.05 : 0.12);
 	h.gun = h.gunWant ? Math.min(1, h.gun + gunSpd) : Math.max(0, h.gun - gunSpd);
 	if (h.shootCD > 0) h.shootCD--;
+	h.handShake = (h.handShake || 0) * 0.92;                                       // дрожь затухает после стрельбы
+	const shAmp = h.handShake * (2 + 2.5 * (h.blind || 0)) + (h.blind || 0) * 0.3;   // вслепую дрожит сильнее (и чуть-чуть всегда)
+	h.shX = (h.shX || 0) * 0.45 + (Math.random() - 0.5) * 2 * shAmp * 0.55;        // сглаженный случайный шум, чтобы не рябило
+	h.shY = (h.shY || 0) * 0.45 + (Math.random() - 0.5) * 2 * shAmp * 0.55;
 	if (h.turnCD > 0) h.turnCD--;
 	if (h.isPlayer && mouseDown) shootUnit(h);
   for (const [, p] of entries) {
@@ -202,7 +217,7 @@ function stepHero() {
     const soft = h.bal * h.bal;
     const kUp = 0.3 * soft;
     const kLeg = 0.5 * soft;
-    const pull = (p, tx, ty, kk) => { p.x += (tx - p.x) * kk; p.y += (ty - p.y) * kk; };
+    const tug = (p, tx, ty, kk) => { p.x += (tx - p.x) * kk; p.y += (ty - p.y) * kk; };   // мягкая подтяжка без ограничения шага; не путать с глобальной pull из animations.js
     for (const [, p] of entries) {
       p.px += (p.x - p.px) * 0.08 * h.bal;
       p.py += (p.y - p.py) * 0.08 * h.bal;
@@ -225,7 +240,7 @@ function stepHero() {
       muscle(ank, toe, f * S.foot * (1 - 2 * lie), (GROUND - RADIUS.toe - toeLift) - ank.y, kLeg, 0, fixed ? 0.03 : 1);
       const kn = kneeIK(P.pelvis, ank, f);
       if (lie > 0) kn.y = lerp(kn.y, Math.min(kn.y, GROUND - RADIUS.knee), lie);
-      pull(knee, kn.x + Health.wobble(s === 'B' ? 2 : 5) * 5, kn.y, kLeg * 0.8);
+      tug(knee, kn.x + Health.wobble(s === 'B' ? 2 : 5) * 5, kn.y, kLeg * 0.8);
       if (planted && !drag) { ank.plant = true; toe.plant = true; }
     }
     const rel = (a, b) => ({ x: (h.off[b].x - h.off[a].x) * f, y: h.off[b].y - h.off[a].y });
@@ -241,16 +256,17 @@ function stepHero() {
       lerp(hd.x + f * (1 * w + 5 * cr) + sway * 5, f * (PRONE.head.fx - PRONE.neck.fx), lie) + fx.hx,
       lerp(hd.y, PRONE.head.y - PRONE.neck.y, lie) + fx.hy, kUp);
 		const aiming = h.bal > 0.6 && lie < 0.3 && !h.bandaging && !h.treat && h.gun > 0.5 && !h.nadeAim && !(h.throwT > 0);
-		if (aiming) {
+				if (aiming) {
 			const ax = Math.cos(h.aimA), ay = Math.sin(h.aimA);
-			const cc = P.chest;
-			const fl = Math.cos(h.aimA) < 0 ? -1 : 1;
+			const sh = P.chest;                                      // плечо
+			const cc = gunOrigin(h);                                 // откуда считаем хват: грудь или точка над головой
+			const fl = (Math.cos(h.aimA) < 0 ? -1 : 1) * (1 - 2 * ease(h.blind || 0));   // при хвате вслепую оружие перевёрнуто
 			const gx = (lx, ly) => ({ x: cc.x + ax * lx - ay * ly * fl, y: cc.y + ay * lx + ax * ly * fl });
-			const gF = gx(13, 9), gB = reloadHand(h, gx) || gx(41, 2);   // перезарядка: рука идёт к магазину, к подсумку и обратно
+			const gF = gx(13, 9), gB = reloadHand(h, gx) || gx(41, 2);
 			const txB = gB.x, tyB = gB.y;
 			const txF = gF.x, tyF = gF.y;
-			const armB = ik2(cc, { x: txB, y: tyB }, S.upperArm, S.foreArm, -h.f, true);
-			const armF = ik2(cc, { x: txF, y: tyF }, S.upperArm, S.foreArm, -h.f, true);
+			const armB = ik2(sh, { x: txB, y: tyB }, S.upperArm, S.foreArm, -h.f, true);
+			const armF = ik2(sh, { x: txF, y: tyF }, S.upperArm, S.foreArm, -h.f, true);
 			pull(P.wristB, armB.end.x, armB.end.y, 0.9, 14);
 			pull(P.wristF, armF.end.x, armF.end.y, 0.9, 14);
 			pull(P.elbowB, armB.mid.x, armB.mid.y, 0.9, 14);

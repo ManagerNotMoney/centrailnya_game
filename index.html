@@ -24,8 +24,12 @@
 
       <div class="menu-body">
         <nav class="menu-nav">
-          <button id="btnPlay" class="menu-btn primary">Играть</button>
-          <button id="btnKeys" class="menu-btn">Управление</button>
+          <button id="btnPlay" class="menu-btn primary">
+            <svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg><span>Играть</span>
+          </button>
+          <button id="btnKeys" class="menu-btn">
+            <svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="11" rx="2"/><path d="M7 11h.01M11 11h.01M15 11h.01M7 14.5h10"/></svg><span>Управление</span>
+          </button>
           <div class="menu-hint">Enter — играть<br>Esc — вернуться в меню</div>
         </nav>
 
@@ -74,6 +78,47 @@
             </li>
           </ul>
         </section>
+
+        <section class="menu-about menu-controls">
+          <h2><span>Управление</span><i></i><small>клавиатура и мышь</small></h2>
+          <div class="menu-keys">
+            <div class="keys-grp" style="--i:0">
+              <h3>Движение</h3>
+              <ul>
+                <li><span class="k"><kbd>A</kbd><kbd>D</kbd></span><span class="d">идти</span></li>
+                <li><span class="k"><kbd>S</kbd></span><span class="d">присесть</span></li>
+                <li><span class="k"><kbd>Shift</kbd></span><span class="d">лечь</span></li>
+                <li><span class="k"><kbd>S</kbd><kbd>Shift</kbd></span><span class="d">рывок</span></li>
+                <li><span class="k"><kbd>S</kbd><kbd>Space</kbd></span><span class="d">огонь вслепую (держать)</span></li>
+              </ul>
+            </div>
+            <div class="keys-grp amber" style="--i:1">
+              <h3>Бой</h3>
+              <ul>
+                <li><span class="k"><kbd>1</kbd></span><span class="d">оружие</span></li>
+                <li><span class="k"><kbd>ЛКМ</kbd></span><span class="d">стрелять</span></li>
+                <li><span class="k"><kbd>ПКМ</kbd></span><span class="d">граната: держи — цель, отпусти — бросок</span></li>
+                <li><span class="k"><kbd>R</kbd></span><span class="d">перезарядка</span></li>
+              </ul>
+            </div>
+            <div class="keys-grp blue" style="--i:2">
+              <h3>Медицина</h3>
+              <ul>
+                <li><span class="k"><kbd>2</kbd></span><span class="d">достать бинт (убирает оружие)</span></li>
+                <li><span class="k"><kbd>2</kbd><kbd>ЛКМ</kbd></span><span class="d">перевязка / аптечка (держать); рядом с раненым из отряда — лечит его</span></li>
+                <li><span class="k"><kbd>A</kbd><kbd>D</kbd></span><span class="d">часто — очнуться после нокаута</span></li>
+              </ul>
+            </div>
+            <div class="keys-grp steel" style="--i:3">
+              <h3>Прочее</h3>
+              <ul>
+                <li><span class="k"><kbd>H</kbd></span><span class="d">показать / скрыть подсказку в игре</span></li>
+                <li><span class="k"><kbd>Esc</kbd></span><span class="d">вернуться в меню</span></li>
+                <li><span class="k"><kbd>Enter</kbd></span><span class="d">играть</span></li>
+              </ul>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -84,10 +129,12 @@
   <div id="hud" class="hidden">
     <div class="keys-tip"><kbd>H</kbd> управление</div>
     <div class="keys">
+      <div class="hd-cap">Управление</div>
       <div class="key-row"><span class="k"><kbd>A</kbd><kbd>D</kbd></span><span class="d">идти</span></div>
       <div class="key-row"><span class="k"><kbd>S</kbd></span><span class="d">присесть</span></div>
       <div class="key-row"><span class="k"><kbd>Shift</kbd></span><span class="d">лечь</span></div>
       <div class="key-row"><span class="k"><kbd>S</kbd><kbd>Shift</kbd></span><span class="d">рывок</span></div>
+      <div class="key-row"><span class="k"><kbd>S</kbd><kbd>Space</kbd></span><span class="d">огонь вслепую (держать)</span></div>
       <div class="key-row"><span class="k"><kbd>1</kbd></span><span class="d">оружие</span></div>
       <div class="key-row"><span class="k"><kbd>ЛКМ</kbd></span><span class="d">стрелять</span></div>
       <div class="key-row"><span class="k"><kbd>ПКМ</kbd></span><span class="d">граната: держи — цель, отпусти — бросок</span></div>
@@ -101,6 +148,7 @@
   <script src="health.js"></script>
   <script src="animations.js"></script>
   <script src="ragdoll.js"></script>
+  <script src="looks.js"></script>
   <script src="fx.js"></script>
   <script src="ai.js"></script>
   <script src="render.js"></script>
